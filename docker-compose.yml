@@ -1,5 +1,6 @@
 services:
   frontend:
+    container_name: wakou-frontend
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -8,35 +9,48 @@ services:
     volumes:
       - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
 
   backend:
+    container_name: wakou-backend
     build:
       context: ./backend
       dockerfile: Dockerfile
+    env_file:
+      - .env
     environment:
       APP_ENV: development
       DATABASE_URL: mysql+pymysql://wakou:wakou_password@db:3306/wakou
-      JWT_SECRET_KEY: ${JWT_SECRET:-dev-secret-key}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key}
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
     restart: unless-stopped
 
   db:
+    container_name: wakou-db
     image: mysql:8.4
     environment:
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_DATABASE: wakou
-      MYSQL_USER: wakou
-      MYSQL_PASSWORD: wakou_password
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_password}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-wakou}
+      MYSQL_USER: ${MYSQL_USER:-wakou}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-wakou_password}
+    ports:
+      - "3306:3306"
     volumes:
       - db_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot_password"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root_password}"]
       interval: 10s
       timeout: 5s
       retries: 10
