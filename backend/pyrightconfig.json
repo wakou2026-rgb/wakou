@@ -1,0 +1,18 @@
+{
+  "include": ["app", "tests"],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "extraPaths": ["."]
+    }
+  ],
+  "typeCheckingMode": "basic",
+  "reportExplicitAny": "none",
+  "reportUnknownVariableType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownParameterType": "none",
+  "reportUntypedBaseClass": "none",
+  "reportUnannotatedClassAttribute": "none",
+  "reportCallInDefaultInitializer": "none"
+}
