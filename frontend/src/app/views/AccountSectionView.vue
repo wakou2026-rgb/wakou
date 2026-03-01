@@ -538,51 +538,66 @@ watch(
           <div v-else-if="shipmentError" class="state error">{{ shipmentError }}</div>
           <div v-else-if="!shipmentCards.length" class="state">{{ $t('shipment.no_orders') }}</div>
           <div v-else class="cards-grid">
-            <article v-for="card in shipmentCards" :key="card.id" class="shipment-card">
+            <article v-for="card in shipmentCards" :key="card.id" class="shipment-card" :class="{ 'is-expanded': expandedCards.has(card.id) }">
               <header class="card-head" role="button" tabindex="0" @click="toggleCard(card.id)" @keydown.enter="toggleCard(card.id)">
-                <div class="head-title">
-                  <p class="product-label">{{ $t('shipment.product') }}</p>
-                  <h2>{{ card.productName }}</h2>
-                </div>
-                <div class="head-meta">
-                  <p>{{ $t('shipment.order_id') }} #{{ card.id }}</p>
-                  <span class="status-badge">{{ statusLabelShipment(card.latestStatus || card.orderStatus) }}</span>
-                </div>
-                <button class="toggle-btn" type="button" :aria-expanded="expandedCards.has(card.id)">
-                  <svg class="toggle-icon" :class="{ rotated: expandedCards.has(card.id) }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                </button>
-              </header>
-              <div v-if="!expandedCards.has(card.id) && card.steps.some(s => s.current)" class="latest-preview">
-                <template v-for="step in card.steps" :key="step.stage">
-                  <div v-if="step.current" class="preview-step">
-                    <span class="preview-dot"></span>
-                    <div class="preview-body">
-                      <p class="preview-title">{{ statusLabelShipment(step.stage) }}</p>
-                      <p v-if="step.event?.description" class="preview-desc">{{ step.event.description }}</p>
-                      <p v-if="step.event?.event_time" class="preview-time">{{ formatEventTime(step.event.event_time) }}</p>
-                    </div>
+                <div class="head-main">
+                  <div class="head-title-group">
+                    <p class="product-label">{{ $t('shipment.product') }}</p>
+                    <h2 class="product-name">{{ card.productName }}</h2>
+                    <p class="order-id">{{ $t('shipment.order_id') }} #{{ card.id }}</p>
                   </div>
-                </template>
-              </div>
-              <div v-if="expandedCards.has(card.id)">
-                <p v-if="!card.events.length" class="no-events">{{ $t('shipment.no_events') }}</p>
-                <ol v-else class="shipment-timeline-list">
-                  <li
-                    v-for="step in card.steps"
-                    :key="`${card.id}-${step.stage}`"
-                    class="shipment-timeline-step"
-                    :class="{ completed: step.completed, current: step.current }"
-                  >
-                    <span class="step-dot"></span>
-                    <div class="step-body">
-                      <p class="step-title">{{ statusLabelShipment(step.stage) }}</p>
-                      <p v-if="step.event?.title" class="step-detail">{{ step.event.title }}</p>
-                      <p v-if="step.event?.description" class="step-sub">{{ step.event.description }}</p>
-                      <p v-if="step.event?.location" class="step-meta">{{ step.event.location }}</p>
-                      <p v-if="step.event?.event_time" class="step-time">{{ formatEventTime(step.event.event_time) }}</p>
+                  <div class="head-status-group">
+                    <span class="status-badge" :data-status="card.latestStatus || card.orderStatus">{{ statusLabelShipment(card.latestStatus || card.orderStatus) }}</span>
+                    <button class="toggle-btn" type="button" :aria-expanded="expandedCards.has(card.id)">
+                      <svg class="toggle-icon" :class="{ rotated: expandedCards.has(card.id) }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                  </div>
+                </div>
+              </header>
+              <div class="card-body">
+                <div v-if="!expandedCards.has(card.id) && card.steps.some(s => s.current)" class="latest-preview">
+                  <template v-for="step in card.steps" :key="step.stage">
+                    <div v-if="step.current" class="preview-step">
+                      <div class="preview-dot-wrap"><span class="preview-dot current"></span></div>
+                      <div class="preview-body">
+                        <p class="preview-title">{{ statusLabelShipment(step.stage) }}</p>
+                        <p v-if="step.event?.description" class="preview-desc">{{ step.event.description }}</p>
+                        <p v-if="step.event?.event_time" class="preview-time">{{ formatEventTime(step.event.event_time) }}</p>
+                      </div>
                     </div>
-                  </li>
-                </ol>
+                  </template>
+                </div>
+                <div v-if="expandedCards.has(card.id)" class="expanded-timeline">
+                  <p v-if="!card.events.length" class="no-events">{{ $t('shipment.no_events') }}</p>
+                  <ol v-else class="shipment-timeline-list">
+                    <li
+                      v-for="step in card.steps"
+                      :key="`${card.id}-${step.stage}`"
+                      class="shipment-timeline-step"
+                      :class="{ completed: step.completed, current: step.current, pending: !step.completed && !step.current }"
+                    >
+                      <div class="step-dot-wrap">
+                        <span class="step-dot">
+                          <svg v-if="step.completed" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                        </span>
+                        <div v-if="step.current" class="step-pulse"></div>
+                        <div class="step-line"></div>
+                      </div>
+                      <div class="step-body">
+                        <p class="step-title">{{ statusLabelShipment(step.stage) }}</p>
+                        <p v-if="step.event?.title" class="step-detail">{{ step.event.title }}</p>
+                        <p v-if="step.event?.description" class="step-sub">{{ step.event.description }}</p>
+                        <div class="step-footer">
+                          <p v-if="step.event?.location" class="step-meta">
+                            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                            {{ step.event.location }}
+                          </p>
+                          <p v-if="step.event?.event_time" class="step-time">{{ formatEventTime(step.event.event_time) }}</p>
+                        </div>
+                      </div>
+                    </li>
+                  </ol>
+                </div>
               </div>
             </article>
           </div>
@@ -1801,216 +1816,426 @@ watch(
   100% { opacity: 0.5; transform: scale(0.9); }
 }
 
-/* ─── Shipment cards (integrated from WarehouseView) ─── */
+/* ─── Shipment cards (Redesign) ─── */
 .shipment-section {
-  display: grid;
-  gap: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
 }
 
 .cards-grid {
   display: grid;
-  gap: 1rem;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
 }
 
 .shipment-card {
-  border: 1px solid var(--paper-300);
-  background:
-    linear-gradient(180deg, rgba(255,255,255,0.74), rgba(255,255,255,0.5)),
-    radial-gradient(circle at top right, rgba(231,210,175,0.35), transparent 45%),
-    var(--paper-50);
-  padding: 1.2rem;
+  background: var(--paper-50, #ffffff);
+  border: 1px solid rgba(178, 146, 98, 0.2);
+  border-radius: 12px;
+  padding: 0;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(24, 42, 71, 0.04), 0 1px 3px rgba(24, 42, 71, 0.02);
+  transition: box-shadow 0.3s ease, transform 0.3s ease, border-color 0.3s ease;
+  position: relative;
+}
+
+.shipment-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(90deg, #e7d2af, #b29262);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.shipment-card.is-expanded {
+  border-color: rgba(178, 146, 98, 0.5);
+  box-shadow: 0 8px 24px rgba(24, 42, 71, 0.08);
+}
+
+.shipment-card.is-expanded::before {
+  opacity: 1;
 }
 
 .card-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 0;
+  padding: 1.5rem;
   cursor: pointer;
-  padding-bottom: 0.9rem;
   user-select: none;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.4)), var(--paper-50);
+}
+
+.card-head:hover .product-name {
+  color: var(--accent-500, #b29262);
+}
+
+.head-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.head-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
 }
 
 .product-label {
   margin: 0;
-  font-size: 0.72rem;
   font-family: var(--font-sans);
-  letter-spacing: 0.1em;
+  font-size: 0.75rem;
+  letter-spacing: 0.15em;
   color: var(--ink-500);
+  text-transform: uppercase;
 }
 
-.head-title h2 {
-  margin: 0.35rem 0 0;
+.product-name {
+  margin: 0;
   font-family: var(--font-serif);
+  font-size: 1.35rem;
   color: var(--ink-900);
-  font-size: 1.25rem;
+  font-weight: 500;
+  transition: color 0.2s ease;
+  line-height: 1.3;
 }
 
-.head-meta {
-  text-align: right;
+.order-id {
+  margin: 0;
   font-family: var(--font-sans);
-  font-size: 0.82rem;
+  font-size: 0.85rem;
   color: var(--ink-600);
 }
 
-.head-meta p {
-  margin: 0;
+.head-status-group {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.8rem;
 }
 
 .status-badge {
   display: inline-flex;
-  margin-top: 0.45rem;
-  border: 1px solid rgba(145,116,78,0.4);
-  padding: 0.2rem 0.55rem;
-  color: var(--ink-800);
-  background: rgba(238,221,196,0.38);
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.8rem;
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  font-weight: 600;
+  border-radius: 999px;
+  letter-spacing: 0.05em;
+  background: var(--paper-300, #d4d9df);
+  color: var(--ink-700);
+  border: 1px solid transparent;
+}
+
+.status-badge[data-status="payment_confirmed"],
+.status-badge[data-status="preparing"],
+.status-badge[data-status="shipped_jp"],
+.status-badge[data-status="in_transit"],
+.status-badge[data-status="customs_tw"],
+.status-badge[data-status="shipped_tw"] {
+  background: rgba(178, 146, 98, 0.15);
+  color: #8c6a38;
+  border-color: rgba(178, 146, 98, 0.4);
+}
+
+.status-badge[data-status="delivered"],
+.status-badge[data-status="completed"] {
+  background: rgba(46, 125, 82, 0.1);
+  color: #2e7d52;
+  border-color: rgba(46, 125, 82, 0.3);
 }
 
 .toggle-btn {
-  background: transparent;
-  border: 0;
-  color: var(--ink-500);
+  background: rgba(24, 42, 71, 0.04);
+  border: 1px solid rgba(24, 42, 71, 0.08);
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-700);
   cursor: pointer;
-  flex-shrink: 0;
-  padding: 0.2rem;
-  margin-top: 0.2rem;
+  transition: all 0.2s ease;
+}
+
+.toggle-btn:hover {
+  background: rgba(178, 146, 98, 0.1);
+  color: var(--accent-500, #b29262);
+  border-color: rgba(178, 146, 98, 0.3);
 }
 
 .toggle-icon {
-  display: block;
-  height: 18px;
   width: 18px;
-  transition: transform 0.22s ease;
+  height: 18px;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .toggle-icon.rotated {
   transform: rotate(180deg);
 }
 
+.card-body {
+  border-top: 1px solid transparent;
+  transition: border-color 0.3s ease;
+}
+
+.shipment-card.is-expanded .card-body {
+  border-color: rgba(178, 146, 98, 0.15);
+  background: rgba(255, 255, 255, 0.4);
+}
+
 .latest-preview {
-  border-top: 1px solid var(--paper-300);
-  padding-top: 0.7rem;
+  padding: 0 1.5rem 1.5rem;
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+.preview-step {
   display: flex;
-  gap: 0.6rem;
-  align-items: flex-start;
+  gap: 1rem;
+  align-items: center;
+  background: rgba(178, 146, 98, 0.04);
+  border-radius: 8px;
+  padding: 1rem;
+  border: 1px solid rgba(178, 146, 98, 0.1);
+}
+
+.preview-dot-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
 }
 
 .preview-dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background: #b29262;
-  flex-shrink: 0;
-  margin-top: 0.32rem;
-  box-shadow: 0 0 0 3px rgba(178,146,98,0.18);
+  background: var(--accent-500, #b29262);
+  box-shadow: 0 0 0 4px rgba(178, 146, 98, 0.2);
 }
 
 .preview-body {
+  flex: 1;
   min-width: 0;
 }
 
 .preview-title {
   margin: 0;
   font-family: var(--font-sans);
-  color: var(--ink-800);
-  font-size: 0.9rem;
+  color: var(--ink-900);
+  font-size: 0.95rem;
   font-weight: 600;
 }
 
 .preview-desc {
-  margin: 0.15rem 0 0;
+  margin: 0.2rem 0 0;
   font-family: var(--font-sans);
-  font-size: 0.8rem;
-  color: var(--ink-600);
+  font-size: 0.85rem;
+  color: var(--ink-700);
 }
 
 .preview-time {
-  margin: 0.1rem 0 0;
+  margin: 0.2rem 0 0;
   font-family: var(--font-sans);
-  font-size: 0.74rem;
+  font-size: 0.75rem;
   color: var(--ink-500);
 }
 
-.no-events {
-  margin: 0;
-  font-family: var(--font-sans);
-  color: var(--ink-500);
+.expanded-timeline {
+  padding: 1.5rem;
+  animation: expandDown 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transform-origin: top;
+}
+
+@keyframes expandDown {
+  0% { opacity: 0; transform: translateY(-10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
 }
 
 .shipment-timeline-list {
   list-style: none;
   margin: 0;
   padding: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .shipment-timeline-step {
-  position: relative;
   display: grid;
-  grid-template-columns: 20px 1fr;
-  gap: 0.7rem;
-  padding-bottom: 0.9rem;
+  grid-template-columns: 24px 1fr;
+  gap: 1.2rem;
+  position: relative;
+  padding-bottom: 2rem;
 }
 
-.shipment-timeline-step::after {
-  content: "";
-  position: absolute;
-  top: 18px;
-  left: 8px;
-  width: 2px;
-  height: calc(100% - 15px);
-  background: var(--paper-300);
+.shipment-timeline-step:last-child {
+  padding-bottom: 0;
 }
 
-.shipment-timeline-step:last-child::after {
-  display: none;
+.step-dot-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  height: 100%;
 }
 
 .step-dot {
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
-  margin-top: 2px;
-  border: 1px solid var(--paper-300);
+  border: 2px solid var(--paper-300);
   background: var(--paper-50);
-  transition: background 0.2s ease, border-color 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  transition: all 0.3s ease;
+  color: white;
+}
+
+.step-line {
+  position: absolute;
+  top: 24px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--paper-300);
+  z-index: 1;
+}
+
+.shipment-timeline-step:last-child .step-line {
+  display: none;
 }
 
 .shipment-timeline-step.completed .step-dot {
-  background: #b29262;
-  border-color: #b29262;
+  background: var(--accent-500, #b29262);
+  border-color: var(--accent-500, #b29262);
+  color: #fff;
+}
+
+.shipment-timeline-step.completed .step-line {
+  background: linear-gradient(180deg, var(--accent-500) 0%, rgba(178, 146, 98, 0.3) 100%);
+}
+
+.shipment-timeline-step.completed:not(:last-child) .step-line {
+  background: var(--accent-500, #b29262);
 }
 
 .shipment-timeline-step.current .step-dot {
-  box-shadow: 0 0 0 4px rgba(178,146,98,0.2);
+  border-color: var(--accent-500, #b29262);
+  background: #fff;
+  border-width: 4px;
+}
+
+.shipment-timeline-step.current .step-pulse {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-500, #b29262);
+  opacity: 0.4;
+  z-index: 1;
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+.shipment-timeline-step.pending .step-dot {
+  background: var(--paper-50);
+  border-color: var(--paper-300);
+}
+
+.step-body {
+  padding-top: 2px;
 }
 
 .step-title {
   margin: 0;
   font-family: var(--font-sans);
-  color: var(--ink-700);
-  font-size: 0.92rem;
+  font-size: 1.05rem;
+  color: var(--ink-600);
+  font-weight: 500;
+  transition: color 0.3s ease;
 }
 
-.shipment-timeline-step.completed .step-title,
+.shipment-timeline-step.completed .step-title {
+  color: var(--ink-800);
+}
+
 .shipment-timeline-step.current .step-title {
-  color: var(--ink-900);
+  color: var(--accent-500, #b29262);
   font-weight: 600;
 }
 
-.step-detail,
-.step-sub,
-.step-meta,
-.step-time {
-  margin: 0.18rem 0 0;
+.step-detail {
+  margin: 0.3rem 0 0;
   font-family: var(--font-sans);
-  font-size: 0.8rem;
-  color: var(--ink-600);
+  font-size: 0.9rem;
+  color: var(--ink-800);
 }
 
+.step-sub {
+  margin: 0.2rem 0 0;
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  color: var(--ink-600);
+  line-height: 1.4;
+}
+
+.step-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.5rem;
+  align-items: center;
+}
+
+.step-meta,
 .step-time {
-  color: var(--ink-500);
+  margin: 0;
+  font-family: var(--font-sans);
   font-size: 0.75rem;
+  color: var(--ink-500);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.step-meta {
+  color: var(--ink-700);
+  background: rgba(24, 42, 71, 0.04);
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  border: 1px solid rgba(24, 42, 71, 0.06);
+}
+
+.no-events {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--ink-500);
+  text-align: center;
+  padding: 2rem;
+  background: rgba(24, 42, 71, 0.02);
+  border-radius: 8px;
+  border: 1px dashed var(--paper-300);
 }
 
 @media (max-width: 900px) {
@@ -2043,6 +2268,18 @@ watch(
   }
   .gacha-counter-value {
     font-size: 2.8rem;
+  }
+
+  .head-main {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .head-status-group {
+    align-items: center;
+    flex-direction: row-reverse;
+    width: 100%;
+    justify-content: space-between;
+    margin-top: 0.5rem;
   }
 }
 

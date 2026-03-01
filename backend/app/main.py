@@ -31,6 +31,7 @@ orders_router_module = importlib.import_module("app.modules.orders.router")
 categories_router_module = importlib.import_module("app.modules.categories.router")
 comm_router_module = importlib.import_module("app.modules.orders.comm_router")
 reviews_buyer_router_module = importlib.import_module("app.modules.reviews.buyer_router")
+reviews_admin_router_module = importlib.import_module("app.modules.reviews.router")
 
 Base = db_module.Base
 SessionLocal = db_module.SessionLocal
@@ -67,6 +68,7 @@ app.include_router(categories_router_module.public_router)
 app.include_router(categories_router_module.admin_router)
 app.include_router(comm_router_module.router)
 app.include_router(reviews_buyer_router_module.router)
+app.include_router(reviews_admin_router_module.router)
 
 
 @app.on_event("startup")
@@ -84,6 +86,18 @@ def _run_migrations() -> None:  # noqa: WPS430
         except OperationalError:
             # Column already exists — safe to ignore
             pass
+
+
+@app.on_event("startup")
+def _seed_demo_data() -> None:  # noqa: WPS430
+    """Populate demo/seed data if tables are empty."""
+    try:
+        from app.seed_data import seed_all
+        seed_all()
+    except Exception:
+        # Seed failures must not prevent server startup
+        import traceback
+        traceback.print_exc()
 
 class OrderPayload(BaseModel):
     product_id: int = Field(validation_alias=AliasChoices("product_id", "productId"))
