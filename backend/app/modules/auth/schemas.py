@@ -17,6 +17,10 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 

@@ -20,8 +20,17 @@ auth_models = importlib.import_module("app.modules.auth.models")
 auth_schemas = importlib.import_module("app.modules.auth.schemas")
 auth_security = importlib.import_module("app.modules.auth.security")
 auth_service = importlib.import_module("app.modules.auth.service")
+auth_router_module = importlib.import_module("app.modules.auth.router")
+magazine_router_module = importlib.import_module("app.modules.magazines.router")
 product_models = importlib.import_module("app.modules.products.models")
 product_router = importlib.import_module("app.modules.products.router")
+magazine_models = importlib.import_module("app.modules.magazines.models")
+costs_router_module = importlib.import_module("app.modules.costs.router")
+crm_router_module = importlib.import_module("app.modules.crm.router")
+orders_router_module = importlib.import_module("app.modules.orders.router")
+categories_router_module = importlib.import_module("app.modules.categories.router")
+comm_router_module = importlib.import_module("app.modules.orders.comm_router")
+reviews_buyer_router_module = importlib.import_module("app.modules.reviews.buyer_router")
 
 Base = db_module.Base
 SessionLocal = db_module.SessionLocal
@@ -30,6 +39,11 @@ engine = db_module.engine
 require_role = auth_dependencies.require_role
 User = auth_models.User
 Product = product_models.Product
+MagazineArticle = magazine_models.MagazineArticle
+categories_model_module = importlib.import_module("app.modules.categories.models")
+Category = categories_model_module.Category
+costs_model_module = importlib.import_module("app.modules.costs.models")
+Cost = costs_model_module.Cost
 
 RegisterRequest = auth_schemas.RegisterRequest
 LoginRequest = auth_schemas.LoginRequest
@@ -42,6 +56,34 @@ refresh_access_token = auth_service.refresh_access_token
 
 app = FastAPI(title="wakou-api")
 app.include_router(product_router.router)
+app.include_router(product_router.admin_router)
+app.include_router(auth_router_module.admin_router)
+app.include_router(magazine_router_module.router)
+app.include_router(magazine_router_module.public_router)
+app.include_router(costs_router_module.router)
+app.include_router(crm_router_module.router)
+app.include_router(orders_router_module.router)
+app.include_router(categories_router_module.public_router)
+app.include_router(categories_router_module.admin_router)
+app.include_router(comm_router_module.router)
+app.include_router(reviews_buyer_router_module.router)
+
+
+@app.on_event("startup")
+def _run_migrations() -> None:  # noqa: WPS430
+    """Apply any ad-hoc ALTER TABLE migrations not covered by create_all."""
+    from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
+    with engine.connect() as conn:
+        try:
+            conn.execute(text(
+                "ALTER TABLE magazine_articles "
+                "ADD COLUMN layout_blocks_json LONGTEXT NOT NULL DEFAULT '[]'"
+            ))
+            conn.commit()
+        except OperationalError:
+            # Column already exists — safe to ignore
+            pass
 
 class OrderPayload(BaseModel):
     product_id: int = Field(validation_alias=AliasChoices("product_id", "productId"))
@@ -81,6 +123,13 @@ class CostRecordPayload(BaseModel):
     recorded_at: str
 
 
+class RevenueRecordPayload(BaseModel):
+    title: str
+    amount_twd: int
+    recorded_at: str = ""
+    note: str = ""
+
+
 class PointsPolicyPayload(BaseModel):
     point_value_twd: int
     base_rate: float
@@ -108,7 +157,8 @@ class FinalQuotePayload(BaseModel):
     final_price_twd: int
     shipping_fee_twd: int
     discount_twd: int | None = 0
-
+    shipping_carrier: str | None = None
+    tracking_number: str | None = None
 class TransferProofPayload(BaseModel):
     transfer_proof_url: str
 
@@ -120,6 +170,14 @@ class ReviewModerationPayload(BaseModel):
 class AdminOrderStatusPayload(BaseModel):
     status: str
     note: str | None = None
+
+
+class ShipmentEventPayload(BaseModel):
+    status: str
+    title: str
+    description: str | None = None
+    location: str | None = None
+    event_time: str | None = None
 
 
 class AdminRewardPayload(BaseModel):
@@ -206,6 +264,7 @@ MAGAZINES: list[dict[str, Any]] = []
 USERS_LIST: list[dict[str, Any]] = []
 REVENUE_RECORDS: list[dict[str, Any]] = []
 WAREHOUSE_LOGS: list[dict[str, Any]] = []
+SHIPMENT_EVENTS: dict[int, list[dict[str, Any]]] = {}
 POINTS_LOGS: list[dict[str, Any]] = []
 REVIEWS: list[dict[str, Any]] = []
 COST_RECORDS: list[dict[str, Any]] = []
@@ -223,6 +282,7 @@ LEVELS_CONFIG: list[dict[str, Any]] = [
 ]
 next_review_id = 1
 next_cost_id = 1
+next_revenue_id = 1
 next_event_id = 1
 ORDERS: dict[int, dict[str, Any]] = {
     1: {
@@ -268,6 +328,14 @@ next_mag_article_id = 1
 FULL_ADMIN_ROLES = {"admin", "super_admin"}
 PRODUCT_ADMIN_ROLES = {"admin", "super_admin", "maintenance"}
 ORDER_ADMIN_ROLES = {"admin", "super_admin", "sales", "maintenance"}
+
+
+def _get_user_dict(user: object = Depends(auth_dependencies.get_current_user)) -> dict[str, str]:
+    """Bridge: wraps get_current_user so old routes benefit from dependency_overrides in tests."""
+    display_name = USER_DISPLAY_NAMES.get(getattr(user, "email", ""))
+    if not display_name:
+        display_name = str(getattr(user, "email", "")).split("@", 1)[0]
+    return {"email": getattr(user, "email", ""), "role": getattr(user, "role", ""), "display_name": display_name}
 def _current_user(authorization: str | None) -> dict[str, str]:
     if authorization is None or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing bearer token")
@@ -336,6 +404,47 @@ def _room_timeline(room_id: int) -> list[dict[str, Any]]:
     rows = [item for item in EVENT_LOGS if item.get("room_id") == room_id]
     rows.sort(key=lambda item: int(item.get("id") or 0), reverse=True)
     return rows
+
+
+def _shipment_events_for(order_id: int) -> list[dict[str, Any]]:
+    rows = list(SHIPMENT_EVENTS.get(order_id, []))
+    rows.sort(key=lambda item: item.get("event_time") or "")
+    return rows
+
+
+def _append_shipment_event(
+    order_id: int,
+    status: str,
+    title: str,
+    description: str | None = None,
+    location: str | None = None,
+    event_time: str | None = None,
+) -> dict[str, Any]:
+    order = ORDERS.get(order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="order not found")
+
+    normalized_time = event_time
+    if not normalized_time:
+        normalized_time = datetime.now(timezone.utc).isoformat()
+    else:
+        event_time_value = str(event_time)
+        try:
+            normalized_time = datetime.fromisoformat(event_time_value.replace("Z", "+00:00")).isoformat()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid event_time") from exc
+
+    event = {
+        "order_id": order_id,
+        "status": status,
+        "title": title,
+        "description": description,
+        "location": location,
+        "event_time": normalized_time,
+    }
+    SHIPMENT_EVENTS.setdefault(order_id, []).append(event)
+    SHIPMENT_EVENTS[order_id].sort(key=lambda row: row.get("event_time") or "")
+    return event
 
 
 def _user_notifications(email: str) -> dict[str, Any]:
@@ -605,7 +714,9 @@ def _ensure_magazine_brand(brand: str) -> dict[str, Any]:
 
 
 def reset_state() -> None:
-    global next_order_id, next_room_id, next_product_id, next_mag_article_id, next_review_id, next_cost_id, next_event_id, next_coupon_id, next_user_coupon_id, next_gacha_pool_id
+
+    global next_order_id, next_room_id, next_product_id, next_mag_article_id, next_review_id, next_cost_id, next_revenue_id, next_event_id, next_coupon_id, next_user_coupon_id, next_gacha_pool_id
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     session = SessionLocal()
     try:
@@ -621,6 +732,33 @@ def reset_state() -> None:
                     name_en="Rolex Submariner 5513",
                     price_twd=380000,
                     grade="A",
+                    description_zh="經典潛水錶款，面盤帶有迷人岁月痕跡。",
+                    description_ja="美しいエイジング文字盤を持つクラシックなダイバーズウォッチ。",
+                    description_en="Classic dive watch with a beautifully aged dial.",
+                ),
+                Product(
+                    sku="WK-BAG-001",
+                    category="bag",
+                    name_zh_hant="Vintage Hermès Kelly 32",
+                    name_ja="ヴィンテージ エルメス ケリー 32",
+                    name_en="Vintage Hermès Kelly 32",
+                    price_twd=420000,
+                    grade="B",
+                    description_zh="稀有皮質與五金，歷經岁月更顯優雅。",
+                    description_ja="希少なレザーと金具、時を経てさらに優雅さを増す逸品。",
+                    description_en="Rare leather and hardware, aging gracefully over time.",
+                ),
+                Product(
+                    sku="WK-JEWELRY-001",
+                    category="jewelry",
+                    name_zh_hant="Tiffany & Co. 古董珍珠項錢",
+                    name_ja="Tiffany & Co. アンティークパールネックレス",
+                    name_en="Tiffany & Co. Antique Pearl Necklace",
+                    price_twd=68000,
+                    grade="A",
+                    description_zh="典雅珍珠搭配復古鉤扣，跨越時代的經典設計。",
+                    description_ja="エレガントなパールとヴィンテージクラスプ、時代を超える名品。",
+                    description_en="Elegant pearls with vintage clasp, a timeless design.",
                 ),
                 Product(
                     sku="WK-APPAREL-001",
@@ -630,25 +768,34 @@ def reset_state() -> None:
                     name_en="Seven by Seven Reconstructed Denim Jacket",
                     price_twd=18500,
                     grade="S",
+                    description_zh="手工拆解拼接老丹寧，每件皆1独一無二。",
+                    description_ja="手作業で解体・再構築されたヴィンテージデニム。すべてが一点物。",
+                    description_en="Hand-deconstructed vintage denim. Each piece is unique.",
                 ),
                 Product(
-                    sku="WK-APPAREL-002",
-                    category="apparel",
-                    name_zh_hant="Nanamica Gore-Tex 巡洋艦外套",
-                    name_ja="Nanamica ゴアテックス クルーザージャケット",
-                    name_en="Nanamica Gore-Tex Cruiser Jacket",
-                    price_twd=24000,
+                    sku="WK-LIFESTYLE-001",
+                    category="lifestyle",
+                    name_zh_hant="昭和銅製花器",
+                    name_ja="昭和銅製花器",
+                    name_en="Showa-era Copper Flower Vase",
+                    price_twd=12500,
                     grade="A",
+                    description_zh="昭和時期手工鍛造，銅面隨岁月生成獨特綠青。",
+                    description_ja="昭和時代の手打ち銅器、経年の綠青が独特の味わいを醇す。",
+                    description_en="Hand-forged in the Showa era, copper patina tells its own story.",
                 ),
                 Product(
-                    sku="WK-BAG-001",
-                    category="bag",
-                    name_zh_hant="Vintage Hermes Kelly 32",
-                    name_ja="ヴィンテージ エルメス ケリー 32",
-                    name_en="Vintage Hermes Kelly 32",
-                    price_twd=420000,
-                    grade="B",
-                ),
+                    sku="WK-ACC-001",
+                    category="accessory",
+                    name_zh_hant="Vintage Cartier 絲巾",
+                    name_ja="ヴィンテージ カルティエ スカーフ",
+                    name_en="Vintage Cartier Silk Scarf",
+                    price_twd=9800,
+                    grade="S",
+                    description_zh="法式優雅印花絲巾，品相如新的珍稀品。",
+                    description_ja="フレンチエレガンスのシルクスカーフ、極美品。",
+                    description_en="French-elegant silk scarf in pristine condition.",
+                )
             ]
         )
         session.commit()
@@ -656,6 +803,17 @@ def reset_state() -> None:
         register_user(session, "user@wakou-demo.com", "user123", "buyer")
         register_user(session, "sales@wakou-demo.com", "sales123", "sales")
         register_user(session, "maint@wakou-demo.com", "maint123", "maintenance")
+        register_user(session, "vip@wakou-demo.com", "vip123", "buyer")
+        # 示範買家帳戶
+        register_user(session, "yuki@demo.com", "demo123", "buyer")
+        register_user(session, "kenji@demo.com", "demo123", "buyer")
+        register_user(session, "mei@demo.com", "demo123", "buyer")
+        # 設定示範買家的顯示名稱
+        for email, name in [("yuki@demo.com", "佐藤 ゆき"), ("kenji@demo.com", "田中 健司"), ("mei@demo.com", "林 美惠")]:
+            u = session.scalar(select(User).where(User.email == email))
+            if u:
+                u.display_name = name
+        session.commit()
     finally:
         session.close()
     ORDERS.clear()
@@ -667,6 +825,7 @@ def reset_state() -> None:
     USERS_LIST.clear()
     REVENUE_RECORDS.clear()
     WAREHOUSE_LOGS.clear()
+    SHIPMENT_EVENTS.clear()
     POINTS_LOGS.clear()
     REVIEWS.clear()
     COST_RECORDS.clear()
@@ -683,22 +842,112 @@ def reset_state() -> None:
     next_mag_article_id = 1
     next_review_id = 1
     next_cost_id = 1
+    next_revenue_id = 1
     next_event_id = 1
     next_coupon_id = 1
     next_user_coupon_id = 1
     next_gacha_pool_id = 1
 
     PRODUCTS.extend([
-            {"id": 1, "sku": "WK-WATCH-001", "category": "watch", "name": {"zh-Hant": "Rolex Submariner 5513", "ja": "ロレックス サブマリーナ 5513", "en": "Rolex Submariner 5513"}, "price_twd": 380000, "grade": "A", "image_urls": ["https://images.unsplash.com/photo-1523170335258-f5ed11844a49?ixlib=rb-4.0.3&auto=format&fit=crop&w=900&q=80"], "description": {"zh-Hant": "經典潛水錶款，面盤帶有迷人歲月痕跡。", "ja": "美しいエイジング文字盤を持つクラシックなダイバーズウォッチ。", "en": "Classic dive watch with a beautifully aged dial."}},
-            {"id": 2, "sku": "WK-APPAREL-001", "category": "apparel", "name": {"zh-Hant": "Seven by Seven 重製丹寧外套", "ja": "Seven by Seven 再構築デニムジャケット", "en": "Seven by Seven Reconstructed Denim Jacket"}, "price_twd": 18500, "grade": "S", "image_urls": ["https://images.unsplash.com/photo-1576871337622-98d48d1cf531?ixlib=rb-4.0.3&auto=format&fit=crop&w=900&q=80"], "description": {"zh-Hant": "手工拆解拼接老丹寧，每件皆獨一無二。", "ja": "手作業で解体・再構築されたヴィンテージデニム。すべてが一点物。", "en": "Hand-deconstructed vintage denim. Each piece is unique."}},
-            {"id": 3, "sku": "WK-APPAREL-002", "category": "apparel", "name": {"zh-Hant": "Nanamica Gore-Tex 巡洋艦外套", "ja": "Nanamica ゴアテックス クルーザージャケット", "en": "Nanamica Gore-Tex Cruiser Jacket"}, "price_twd": 24000, "grade": "A", "image_urls": ["https://images.unsplash.com/photo-1591047139829-d91aecb6caea?ixlib=rb-4.0.3&auto=format&fit=crop&w=900&q=80"], "description": {"zh-Hant": "結合經典版型與現代防水透氣科技的都會首選。", "ja": "クラシックなシルエットと現代の防水透湿技術を融合。", "en": "Urban essential combining classic silhouette with modern waterproof tech."}},
-            {"id": 4, "sku": "WK-BAG-001", "category": "bag", "name": {"zh-Hant": "Vintage Hermes Kelly 32", "ja": "ヴィンテージ エルメス ケリー 32", "en": "Vintage Hermes Kelly 32"}, "price_twd": 420000, "grade": "B", "image_urls": ["https://images.unsplash.com/photo-1590874103328-eac38a683ce7?ixlib=rb-4.0.3&auto=format&fit=crop&w=900&q=80"], "description": {"zh-Hant": "稀有皮質與五金，歷經歲月更顯優雅。", "ja": "希少なレザーと金具、時を経てさらに優雅さを増す逸品。", "en": "Rare leather and hardware, aging gracefully over time."}}
-        ])
+        {
+            "id": 1, "sku": "WK-WATCH-001", "category": "watch",
+            "name": {"zh-Hant": "Rolex Submariner 5513", "ja": "ロレックス サブマリーナ 5513", "en": "Rolex Submariner 5513"},
+            "price_twd": 380000, "grade": "A",
+            "image_urls": ["/Watches.png"],
+            "description": {"zh-Hant": "經典潛水錶款，面盤帶有迷人歲月痕跡。", "ja": "美しいエイジング文字盤を持つクラシックなダイバーズウォッチ。", "en": "Classic dive watch with a beautifully aged dial."},
+        },
+        {
+            "id": 2, "sku": "WK-BAG-001", "category": "bag",
+            "name": {"zh-Hant": "Vintage Hermès Kelly 32", "ja": "ヴィンテージ エルメス ケリー 32", "en": "Vintage Hermès Kelly 32"},
+            "price_twd": 420000, "grade": "B",
+            "image_urls": ["/Handbags.png"],
+            "description": {"zh-Hant": "稀有皮質與五金，歷經歲月更顯優雅。", "ja": "希少なレザーと金具、時を経てさらに優雅さを増す逸品。", "en": "Rare leather and hardware, aging gracefully over time."},
+        },
+        {
+            "id": 3, "sku": "WK-JEWELRY-001", "category": "jewelry",
+            "name": {"zh-Hant": "Tiffany & Co. 古董珍珠項鍊", "ja": "Tiffany & Co. アンティークパールネックレス", "en": "Tiffany & Co. Antique Pearl Necklace"},
+            "price_twd": 68000, "grade": "A",
+            "image_urls": ["/Jewelry.png"],
+            "description": {"zh-Hant": "典雅珍珠搭配復古鍊扣，跨越時代的經典設計。", "ja": "エレガントなパールとヴィンテージクラスプ、時代を超える名品。", "en": "Elegant pearls with vintage clasp, a timeless design."},
+        },
+        {
+            "id": 4, "sku": "WK-APPAREL-001", "category": "apparel",
+            "name": {"zh-Hant": "Seven by Seven 重製丹寧外套", "ja": "Seven by Seven 再構築デニムジャケット", "en": "Seven by Seven Reconstructed Denim Jacket"},
+            "price_twd": 18500, "grade": "S",
+            "image_urls": ["/Apparel.png"],
+            "description": {"zh-Hant": "手工拆解拼接老丹寧，每件皆獨一無二。", "ja": "手作業で解体・再構築されたヴィンテージデニム。すべてが一点物。", "en": "Hand-deconstructed vintage denim. Each piece is unique."},
+        },
+        {
+            "id": 5, "sku": "WK-LIFESTYLE-001", "category": "lifestyle",
+            "name": {"zh-Hant": "昭和銅製花器", "ja": "昭和銅製花器", "en": "Showa-era Copper Flower Vase"},
+            "price_twd": 12500, "grade": "A",
+            "image_urls": ["/Lifestyle.png"],
+            "description": {"zh-Hant": "昭和時期手工鍛造，銅面隨歲月生成獨特綠青。", "ja": "昭和時代の手打ち銅器、経年の緑青が独特の味わいを醸す。", "en": "Hand-forged in the Showa era, copper patina tells its own story."},
+        },
+        {
+            "id": 6, "sku": "WK-ACC-001", "category": "accessory",
+            "name": {"zh-Hant": "Vintage Cartier 絲巾", "ja": "ヴィンテージ カルティエ スカーフ", "en": "Vintage Cartier Silk Scarf"},
+            "price_twd": 9800, "grade": "S",
+            "image_urls": ["/Wallets.png"],
+            "description": {"zh-Hant": "法式優雅印花絲巾，品相如新的珍稀品。", "ja": "フレンチエレガンスのシルクスカーフ、極美品。", "en": "French-elegant silk scarf in pristine condition."},
+        },
+    ])
     WAREHOUSE_LOGS.extend(
         [
-            {"id": 1, "arrived_at": "2026-02-20T10:00:00Z", "source_city": "Tokyo"},
-            {"id": 2, "arrived_at": "2026-02-21T10:00:00Z", "source_city": "Osaka"},
-            {"id": 3, "arrived_at": "2026-02-22T10:00:00Z", "source_city": "Nagoya"},
+            {
+                "id": 1,
+                "arrived_at": "2026-02-28T09:15:00Z",
+                "source_city": "Tokyo",
+                "product_name": "Rolex Submariner 5513 アンティーク",
+                "image_url": "https://images.unsplash.com/photo-1547996160-81dfa63595aa?w=600&q=80",
+                "category": "watch",
+                "description": "1968年製造，原裝表盤，狀態極佳",
+            },
+            {
+                "id": 2,
+                "arrived_at": "2026-02-27T14:30:00Z",
+                "source_city": "Osaka",
+                "product_name": "Hermès Kelly 32 ヴィンテージ",
+                "image_url": "https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=600&q=80",
+                "category": "bag",
+                "description": "奶油色 Togo 皮革，金色五金，附原廠盒",
+            },
+            {
+                "id": 3,
+                "arrived_at": "2026-02-26T11:00:00Z",
+                "source_city": "Tokyo",
+                "product_name": "Leica M3 クラシックカメラ",
+                "image_url": "https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=600&q=80",
+                "category": "camera",
+                "description": "1955年單捲軸版本，附 Summicron 50mm f/2 鏡頭",
+            },
+            {
+                "id": 4,
+                "arrived_at": "2026-02-25T16:45:00Z",
+                "source_city": "Nagoya",
+                "product_name": "Chanel 2.55 フラップバッグ",
+                "image_url": "https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=600&q=80",
+                "category": "bag",
+                "description": "1990年代中期，黑色 Lambskin，銀色五金",
+            },
+            {
+                "id": 5,
+                "arrived_at": "2026-02-24T08:20:00Z",
+                "source_city": "Kyoto",
+                "product_name": "Omega Constellation ヴィンテージ",
+                "image_url": "https://images.unsplash.com/photo-1523170335258-f5ed11844a49?w=600&q=80",
+                "category": "watch",
+                "description": "1960年代圓形款，原裝星形標誌表盤",
+            },
+            {
+                "id": 6,
+                "arrived_at": "2026-02-23T13:10:00Z",
+                "source_city": "Tokyo",
+                "product_name": "Nikon F フォトニック ファインダー",
+                "image_url": "https://images.unsplash.com/photo-1496016943515-7d33598c11e6?w=600&q=80",
+                "category": "camera",
+                "description": "1968年製，含原廠皮質背帶與鏡頭蓋",
+            },
         ]
     )
     USER_DISPLAY_NAMES.update(
@@ -707,13 +956,15 @@ def reset_state() -> None:
             "user@wakou-demo.com": "客人",
             "sales@wakou-demo.com": "銷售",
             "maint@wakou-demo.com": "維護",
+            "vip@wakou-demo.com": "VIP 會員",
         }
     )
     USERS_LIST.extend([
-        {"email": "admin@wakou-demo.com", "role": "admin", "display_name": "管理員"},
-        {"email": "user@wakou-demo.com", "role": "buyer", "display_name": "客人"},
-        {"email": "sales@wakou-demo.com", "role": "sales", "display_name": "銷售"},
-        {"email": "maint@wakou-demo.com", "role": "maintenance", "display_name": "維護"},
+        {"email": "admin@wakou-demo.com", "role": "admin", "display_name": "管理員", "created_at": "2025-12-01T08:00:00Z", "total_orders": 1, "total_spent_twd": 365000},
+        {"email": "user@wakou-demo.com", "role": "buyer", "display_name": "客人", "created_at": "2026-01-10T14:00:00Z", "total_orders": 2, "total_spent_twd": 438500},
+        {"email": "sales@wakou-demo.com", "role": "sales", "display_name": "銷售", "created_at": "2025-12-15T09:00:00Z", "total_orders": 0, "total_spent_twd": 0},
+        {"email": "maint@wakou-demo.com", "role": "maintenance", "display_name": "維護", "created_at": "2026-01-05T10:00:00Z", "total_orders": 0, "total_spent_twd": 0},
+        {"email": "vip@wakou-demo.com", "role": "buyer", "display_name": "VIP 會員", "created_at": "2025-11-20T16:00:00Z", "total_orders": 5, "total_spent_twd": 890000},
     ])
     ORDERS.update(
         {
@@ -734,16 +985,16 @@ def reset_state() -> None:
                 "product_id": 3,
                 "mode": "inquiry",
                 "buyer_email": "admin@wakou-demo.com",
-                "product_name": "Nanamica Gore-Tex 巡洋艦外套",
-                "amount_twd": 24000,
-                "final_amount_twd": 24000,
+                "product_name": "Tiffany & Co. 古董珍珠項鍊",
+                "amount_twd": 68000,
+                "final_amount_twd": 68000,
                 "status": "waiting_quote",
                 "comm_room_id": 2,
                 "created_at": "2026-02-21T11:00:00Z",
             },
             3: {
                 "id": 3,
-                "product_id": 2,
+                "product_id": 4,
                 "mode": "inquiry",
                 "buyer_email": "user@wakou-demo.com",
                 "product_name": "Seven by Seven 重製丹寧外套",
@@ -752,6 +1003,18 @@ def reset_state() -> None:
                 "status": "quoted",
                 "comm_room_id": 3,
                 "created_at": "2026-02-23T08:30:00Z",
+            },
+            4: {
+                "id": 4,
+                "product_id": 2,
+                "mode": "buy_now",
+                "buyer_email": "user@wakou-demo.com",
+                "product_name": "Vintage Hermès Kelly 32",
+                "amount_twd": 420000,
+                "final_amount_twd": 420000,
+                "status": "paid",
+                "comm_room_id": 4,
+                "created_at": "2026-02-25T14:00:00Z",
             },
         }
     )
@@ -776,11 +1039,11 @@ def reset_state() -> None:
                 "order_id": 2,
                 "buyer_email": "admin@wakou-demo.com",
                 "product_id": 3,
-                "product_name": "Nanamica Gore-Tex 巡洋艦外套",
+                "product_name": "Tiffany & Co. 古董珍珠項鍊",
                 "status": "waiting_quote",
                 "messages": [
                     {"id": 1, "from": "system", "message": "諮詢室已建立", "timestamp": "2026-02-21T11:00:00Z"},
-                    {"id": 2, "from": "buyer", "message": "想確認有無備品與尺寸細節", "timestamp": "2026-02-21T11:20:00Z"},
+                    {"id": 2, "from": "buyer", "message": "想確認珍珠材質與證書細節", "timestamp": "2026-02-21T11:20:00Z"},
                 ],
                 "created_at": "2026-02-21T11:00:00Z",
                 "shipping_quote": None,
@@ -789,7 +1052,7 @@ def reset_state() -> None:
                 "id": 3,
                 "order_id": 3,
                 "buyer_email": "user@wakou-demo.com",
-                "product_id": 2,
+                "product_id": 4,
                 "product_name": "Seven by Seven 重製丹寧外套",
                 "status": "quoted",
                 "messages": [
@@ -798,6 +1061,21 @@ def reset_state() -> None:
                 ],
                 "created_at": "2026-02-23T08:30:00Z",
                 "shipping_quote": {"currency": "TWD", "amount": 180},
+            },
+            4: {
+                "id": 4,
+                "order_id": 4,
+                "buyer_email": "user@wakou-demo.com",
+                "product_id": 2,
+                "product_name": "Vintage Hermès Kelly 32",
+                "status": "paid",
+                "messages": [
+                    {"id": 1, "from": "system", "message": "諮詢室已建立", "timestamp": "2026-02-25T14:00:00Z"},
+                    {"id": 2, "from": "buyer", "message": "已完成匯款", "timestamp": "2026-02-25T15:30:00Z"},
+                    {"id": 3, "from": "system", "message": "管理員已確認收款", "timestamp": "2026-02-25T16:00:00Z"},
+                ],
+                "created_at": "2026-02-25T14:00:00Z",
+                "shipping_quote": {"currency": "TWD", "amount": 350},
             },
         }
     )
@@ -883,8 +1161,8 @@ def reset_state() -> None:
         "sales",
         order_id=2,
         room_id=2,
-        title="收到尺寸與備品詢問",
-        detail="已加入待處理清單，將於 24 小時內回覆。",
+        title="收到珍珠材質與證書詢問",
+        detail="已加入待處理清單，將於 24 小時內回覆買家。",
         payload={"buyer_email": "admin@wakou-demo.com"},
     )
     _append_event(
@@ -897,9 +1175,412 @@ def reset_state() -> None:
         detail="Seven by Seven 外套報價與運費已上傳。",
         payload={"buyer_email": "user@wakou-demo.com"},
     )
-    next_order_id = 4
-    next_room_id = 4
-    CATEGORIES.extend([{"id": "watch", "title": "手錶", "image": "https://images.unsplash.com/photo-1524805444758-089113d48a6d?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"}, {"id": "accessory", "title": "飾品", "image": "https://images.unsplash.com/photo-1611591437281-460bfbe1220a?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"}, {"id": "apparel", "title": "服飾", "image": "https://images.unsplash.com/photo-1551488831-00ddcb6c6bd3?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"}, {"id": "bag", "title": "包款", "image": "https://images.unsplash.com/photo-1584916201218-f4242ceb4809?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"}, {"id": "lifestyle", "title": "生活選物", "image": "https://images.unsplash.com/photo-1507652313651-64fe32bd80f3?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80"}])
+    _append_event(
+        "order.paid",
+        "user@wakou-demo.com",
+        "buyer",
+        order_id=4,
+        room_id=4,
+        title="買家已完成付款",
+        detail="Vintage Hermès Kelly 32 已確認匯款。",
+        payload={"buyer_email": "user@wakou-demo.com"},
+    )
+    next_cost_id = 16
+    next_revenue_id = len(REVENUE_RECORDS) + 1
+    next_order_id = 5
+    next_room_id = 5
+    # ── 額外示範客戶 ──────────────────────────────────────────────────────────────
+    for _email, _pw, _role in [
+        ("yuki@demo.com", "demo123", "buyer"),
+        ("kenji@demo.com", "demo123", "buyer"),
+        ("mei@demo.com", "demo123", "buyer"),
+    ]:
+        try:
+            register_user(SessionLocal(), _email, _pw, _role)
+        except Exception:
+            pass  # already registered in DB — skip
+    USER_DISPLAY_NAMES.update({
+        "yuki@demo.com": "佐藤 ゆき",
+        "kenji@demo.com": "田中 健司",
+        "mei@demo.com": "林 美惠",
+    })
+    USERS_LIST.extend([
+        {"email": "yuki@demo.com", "role": "buyer", "display_name": "佐藤 ゆき",
+         "created_at": "2026-01-15T10:00:00Z", "total_orders": 3, "total_spent_twd": 476500},
+        {"email": "kenji@demo.com", "role": "buyer", "display_name": "田中 健司",
+         "created_at": "2026-02-01T09:30:00Z", "total_orders": 1, "total_spent_twd": 380000},
+        {"email": "mei@demo.com", "role": "buyer", "display_name": "林 美惠",
+         "created_at": "2026-02-10T14:00:00Z", "total_orders": 2, "total_spent_twd": 86500},
+    ])
+    # ── 額外訂單與諮詢室 ──────────────────────────────────────────────────────────
+    ORDERS.update({
+        5: {
+            "id": 5, "product_id": 5, "mode": "buy_now",
+            "buyer_email": "yuki@demo.com",
+            "product_name": "昭和銅製花器",
+            "amount_twd": 12500, "final_amount_twd": 12500,
+            "status": "completed", "comm_room_id": 5,
+            "created_at": "2026-01-20T11:00:00Z",
+        },
+        6: {
+            "id": 6, "product_id": 6, "mode": "inquiry",
+            "buyer_email": "yuki@demo.com",
+            "product_name": "Vintage Cartier 絲巾",
+            "amount_twd": 9800, "final_amount_twd": 9800,
+            "status": "quoted", "comm_room_id": 6,
+            "created_at": "2026-01-28T15:00:00Z",
+        },
+        7: {
+            "id": 7, "product_id": 1, "mode": "buy_now",
+            "buyer_email": "kenji@demo.com",
+            "product_name": "Rolex Submariner 5513",
+            "amount_twd": 380000, "final_amount_twd": 380000,
+            "status": "paid", "comm_room_id": 7,
+            "created_at": "2026-02-05T10:00:00Z",
+        },
+        8: {
+            "id": 8, "product_id": 3, "mode": "inquiry",
+            "buyer_email": "mei@demo.com",
+            "product_name": "Tiffany & Co. 古董珍珠項鍊",
+            "amount_twd": 68000, "final_amount_twd": 68000,
+            "status": "completed", "comm_room_id": 8,
+            "created_at": "2026-02-12T09:00:00Z",
+        },
+        9: {
+            "id": 9, "product_id": 4, "mode": "buy_now",
+            "buyer_email": "mei@demo.com",
+            "product_name": "Seven by Seven 重製丹寧外套",
+            "amount_twd": 18500, "final_amount_twd": 18500,
+            "status": "waiting_quote", "comm_room_id": 9,
+            "created_at": "2026-02-26T08:00:00Z",
+        },
+    })
+    COMM_ROOMS.update({
+        5: {
+            "id": 5, "order_id": 5, "buyer_email": "yuki@demo.com",
+            "product_id": 5, "product_name": "昭和銅製花器",
+            "status": "completed",
+            "messages": [
+                {"id": 1, "from": "system", "message": "諮詢室已建立", "timestamp": "2026-01-20T11:00:00Z"},
+                {"id": 2, "from": "buyer", "message": "請問這件花器的高度大概幾公分？", "timestamp": "2026-01-20T11:30:00Z"},
+                {"id": 3, "from": "sales", "message": "高度約 28 公分，底部直徑 12 公分，重量約 850g。", "timestamp": "2026-01-20T14:00:00Z"},
+                {"id": 4, "from": "buyer", "message": "太好了，我決定購買！", "timestamp": "2026-01-21T09:00:00Z"},
+                {"id": 5, "from": "system", "message": "訂單已完成交付", "timestamp": "2026-01-22T10:00:00Z"},
+            ],
+            "created_at": "2026-01-20T11:00:00Z",
+            "shipping_quote": {"currency": "TWD", "amount": 120},
+        },
+        6: {
+            "id": 6, "order_id": 6, "buyer_email": "yuki@demo.com",
+            "product_id": 6, "product_name": "Vintage Cartier 絲巾",
+            "status": "quoted",
+            "messages": [
+                {"id": 1, "from": "system", "message": "諮詢室已建立", "timestamp": "2026-01-28T15:00:00Z"},
+                {"id": 2, "from": "buyer", "message": "可以提供絲巾的尺寸與成色照片嗎？", "timestamp": "2026-01-28T15:30:00Z"},
+                {"id": 3, "from": "sales", "message": "尺寸 90x90cm，成色 9 成新，已附近拍照。", "timestamp": "2026-01-29T10:00:00Z"},
+                {"id": 4, "from": "buyer", "message": "請問可以折扣嗎？", "timestamp": "2026-01-29T11:00:00Z"},
+                {"id": 5, "from": "sales", "message": "此件為精選定價，暫無折扣空間，感謝理解。", "timestamp": "2026-01-29T13:00:00Z"},
+            ],
+            "created_at": "2026-01-28T15:00:00Z",
+            "shipping_quote": {"currency": "TWD", "amount": 80},
+        },
+        7: {
+            "id": 7, "order_id": 7, "buyer_email": "kenji@demo.com",
+            "product_id": 1, "product_name": "Rolex Submariner 5513",
+            "status": "paid",
+            "messages": [
+                {"id": 1, "from": "system", "message": "諮詢室已建立", "timestamp": "2026-02-05T10:00:00Z"},
+                {"id": 2, "from": "buyer", "message": "這支錶的機芯是否有保養過？", "timestamp": "2026-02-05T10:30:00Z"},
+                {"id": 3, "from": "sales", "message": "已於 2025 年底完成全機芯大保養，附保養證明。", "timestamp": "2026-02-05T14:00:00Z"},
+                {"id": 4, "from": "buyer", "message": "好的，我確認購買，已完成匯款。", "timestamp": "2026-02-06T09:00:00Z"},
+                {"id": 5, "from": "system", "message": "管理員已確認收款", "timestamp": "2026-02-06T10:00:00Z"},
+            ],
+            "created_at": "2026-02-05T10:00:00Z",
+            "shipping_quote": {"currency": "TWD", "amount": 350},
+        },
+        8: {
+            "id": 8, "order_id": 8, "buyer_email": "mei@demo.com",
+            "product_id": 3, "product_name": "Tiffany & Co. 古董珍珠項鍊",
+            "status": "completed",
+            "messages": [
+                {"id": 1, "from": "system", "message": "諮詢室已建立", "timestamp": "2026-02-12T09:00:00Z"},
+                {"id": 2, "from": "buyer", "message": "項鍊有附原廠包裝盒嗎？", "timestamp": "2026-02-12T09:30:00Z"},
+                {"id": 3, "from": "sales", "message": "有原廠藍色珠寶盒與防塵袋，狀態完好。", "timestamp": "2026-02-12T11:00:00Z"},
+                {"id": 4, "from": "buyer", "message": "完美，確認購買！", "timestamp": "2026-02-12T11:30:00Z"},
+                {"id": 5, "from": "system", "message": "訂單已完成交付", "timestamp": "2026-02-13T09:00:00Z"},
+            ],
+            "created_at": "2026-02-12T09:00:00Z",
+            "shipping_quote": {"currency": "TWD", "amount": 150},
+        },
+        9: {
+            "id": 9, "order_id": 9, "buyer_email": "mei@demo.com",
+            "product_id": 4, "product_name": "Seven by Seven 重製丹寧外套",
+            "status": "open",
+            "messages": [
+                {"id": 1, "from": "system", "message": "諮詢室已建立", "timestamp": "2026-02-26T08:00:00Z"},
+                {"id": 2, "from": "buyer", "message": "請問這件外套的尺寸標是多少？", "timestamp": "2026-02-26T08:30:00Z"},
+            ],
+            "created_at": "2026-02-26T08:00:00Z",
+            "shipping_quote": None,
+        },
+    })
+    # ── 評價資料 ────────────────────────────────────────────────────────────────
+    REVIEWS.extend([
+        {"id": 1, "order_id": 1, "product_id": 1, "product_name": "Rolex Submariner 5513",
+         "buyer_email": "admin@wakou-demo.com",
+         "rating": 5, "quality_rating": 5, "delivery_rating": 4, "service_rating": 5,
+         "comment": "錶況與描述完全一致，包裝也非常細心，非常滿意這次的購買體驗！",
+         "hidden": False, "seller_reply": "感謝您的支持，期待下次再為您服務。",
+         "created_at": "2026-02-17T10:00:00Z"},
+        {"id": 2, "order_id": 5, "product_id": 5, "product_name": "昭和銅製花器",
+         "buyer_email": "yuki@demo.com",
+         "rating": 5, "quality_rating": 5, "delivery_rating": 5, "service_rating": 5,
+         "comment": "花器実物はとても美しい。写真以上の存在感でした。また購入したいです。",
+         "hidden": False, "seller_reply": "ありがとうございます！またぜひよろしくお願いいたします。",
+         "created_at": "2026-01-23T09:00:00Z"},
+        {"id": 3, "order_id": 7, "product_id": 1, "product_name": "Rolex Submariner 5513",
+         "buyer_email": "kenji@demo.com",
+         "rating": 5, "quality_rating": 5, "delivery_rating": 5, "service_rating": 5,
+         "comment": "保養証明書付きで安心して購入できました。機械の状態も完璧です。",
+         "hidden": False, "seller_reply": None,
+         "created_at": "2026-02-08T11:00:00Z"},
+        {"id": 4, "order_id": 8, "product_id": 3, "product_name": "Tiffany & Co. 古董珍珠項鍊",
+         "buyer_email": "mei@demo.com",
+         "rating": 4, "quality_rating": 4, "delivery_rating": 5, "service_rating": 5,
+         "comment": "珍珠項鍊非常漂亮，附原廠盒超加分，服務態度也很好。",
+         "hidden": False, "seller_reply": "感謝您的評價，珍珠是我們最愛的品項之一！",
+         "created_at": "2026-02-14T12:00:00Z"},
+    ])
+    next_review_id = 5
+    # ── 財報：補充收入與成本 ─────────────────────────────────────────────────────
+    # ── yuki 第3筆大額訂單（Hermès Kelly）───────────────────────────────────────
+    ORDERS.update({
+        10: {
+            "id": 10, "product_id": 2, "mode": "inquiry",
+            "buyer_email": "yuki@demo.com",
+            "product_name": "Vintage Hermès Kelly 32 (二手 A 品)",
+            "amount_twd": 464000, "final_amount_twd": 464000,
+            "status": "completed", "comm_room_id": 10,
+            "created_at": "2026-01-10T09:00:00Z",
+        },
+    })
+    COMM_ROOMS.update({
+        10: {
+            "id": 10, "order_id": 10, "buyer_email": "yuki@demo.com",
+            "product_id": 2, "product_name": "Vintage Hermès Kelly 32 (二手 A 品)",
+            "status": "completed",
+            "messages": [
+                {"id": 1, "from": "system", "message": "諮詢室已建立", "timestamp": "2026-01-10T09:00:00Z"},
+                {"id": 2, "from": "buyer", "message": "請問這個 Kelly 32 的包款顏色是 Etoupe 嗎？包身有無明顯磨損？", "timestamp": "2026-01-10T09:30:00Z"},
+                {"id": 3, "from": "sales", "message": "是的，顏色為 Etoupe（大象灰），包身 A 品成色，僅角落有輕微磨損，五金為金色 Palladium，保存狀況極佳。", "timestamp": "2026-01-10T11:00:00Z"},
+                {"id": 4, "from": "buyer", "message": "有附原廠塵袋嗎？鎖扣運作正常？", "timestamp": "2026-01-10T14:00:00Z"},
+                {"id": 5, "from": "sales", "message": "附原廠 Hermès 橘色塵袋，鎖扣運作完全正常，附實拍影片供您確認。", "timestamp": "2026-01-10T15:30:00Z"},
+                {"id": 6, "from": "buyer", "message": "感謝詳細說明，我決定購買，請提供匯款資訊。", "timestamp": "2026-01-11T10:00:00Z"},
+                {"id": 7, "from": "sales", "message": "感謝您的信任！匯款帳號已傳送至您的信箱，確認收款後我們會立即安排出貨。", "timestamp": "2026-01-11T10:30:00Z"},
+                {"id": 8, "from": "buyer", "message": "已完成匯款，麻煩確認。", "timestamp": "2026-01-12T09:00:00Z"},
+                {"id": 9, "from": "system", "message": "管理員已確認收款，訂單進入備貨流程", "timestamp": "2026-01-12T10:00:00Z"},
+                {"id": 10, "from": "system", "message": "訂單已完成交付", "timestamp": "2026-01-14T15:00:00Z"},
+            ],
+            "created_at": "2026-01-10T09:00:00Z",
+            "shipping_quote": {"currency": "TWD", "amount": 500},
+        },
+    })
+    REVENUE_RECORDS.extend([
+        # ── 1月份收入 ────────────────────────────────────────────────────────────
+        {"id": 1, "order_id": 10, "type": "revenue", "title": "Hermès Kelly 32 (佐藤) — 成交收入", "amount_twd": 464000, "recorded_at": "2026-01-14"},
+        {"id": 2, "order_id": 5, "type": "revenue", "title": "昭和銅製花器 — 成交收入", "amount_twd": 12500, "recorded_at": "2026-01-22"},
+        # ── 2月份收入 ────────────────────────────────────────────────────────────
+        {"id": 3, "order_id": 7, "type": "revenue", "title": "Rolex Submariner 5513 (田中) — 成交收入", "amount_twd": 380000, "recorded_at": "2026-02-06"},
+        {"id": 4, "order_id": 8, "type": "revenue", "title": "Tiffany & Co. 古董珍珠項鍊 — 成交收入", "amount_twd": 68000, "recorded_at": "2026-02-13"},
+        {"id": 5, "order_id": 1, "type": "revenue", "title": "Rolex Submariner 5513 (管理員) — 成交收入", "amount_twd": 365000, "recorded_at": "2026-02-16"},
+        {"id": 6, "order_id": 4, "type": "revenue", "title": "Vintage Hermès Kelly 32 (user) — 成交收入", "amount_twd": 420000, "recorded_at": "2026-02-25"},
+    ])
+    COST_RECORDS.extend([
+        # ── 1月份成本 ────────────────────────────────────────────────────────────
+        {"id": 4, "title": "Hermès Kelly 32 — 採購成本", "amount_twd": 310000, "recorded_at": "2026-01-08", "type": "product", "product_id": 2},
+        {"id": 5, "title": "國際運費與關稅 (1月批次)", "amount_twd": 22000, "recorded_at": "2026-01-09", "type": "misc"},
+        {"id": 6, "title": "昭和銅製花器 — 採購成本", "amount_twd": 6500, "recorded_at": "2026-01-18", "type": "product", "product_id": 5},
+        {"id": 7, "title": "倉儲與保險費 (1月)", "amount_twd": 5500, "recorded_at": "2026-01-31", "type": "misc"},
+        # ── 2月份成本 ────────────────────────────────────────────────────────────
+        {"id": 8, "title": "Rolex Submariner 5513 — 採購成本 (田中)", "amount_twd": 240000, "recorded_at": "2026-02-03", "type": "product", "product_id": 1},
+        {"id": 9, "title": "Tiffany & Co. 古董珍珠項鍊 — 採購成本", "amount_twd": 42000, "recorded_at": "2026-02-08", "type": "product", "product_id": 3},
+        {"id": 10, "title": "國際運費與關稅 (2月批次)", "amount_twd": 28000, "recorded_at": "2026-02-12", "type": "misc"},
+        {"id": 11, "title": "攝影與商品拍攝費 (2月)", "amount_twd": 8000, "recorded_at": "2026-02-15", "type": "misc"},
+        {"id": 12, "title": "Rolex Submariner 5513 — 採購成本 (管理員單)", "amount_twd": 240000, "recorded_at": "2026-02-10", "type": "product", "product_id": 1},
+        {"id": 13, "title": "Vintage Hermès Kelly 32 — 採購成本", "amount_twd": 310000, "recorded_at": "2026-02-20", "type": "product", "product_id": 2},
+        {"id": 14, "title": "包裝耗材與快遞費 (2月)", "amount_twd": 3500, "recorded_at": "2026-02-28", "type": "misc"},
+        {"id": 15, "title": "倉儲與保險費 (2月)", "amount_twd": 5500, "recorded_at": "2026-02-28", "type": "misc"},
+    ])
+    next_cost_id = 16
+    next_revenue_id = len(REVENUE_RECORDS) + 1
+    next_order_id = 11
+    next_room_id = 11
+
+    _append_shipment_event(
+        1,
+        "payment_confirmed",
+        "付款確認",
+        "已確認收款，訂單進入備貨流程。",
+        "Tokyo",
+        "2026-02-16T10:30:00Z",
+    )
+    _append_shipment_event(
+        1,
+        "preparing",
+        "備貨中",
+        "專員完成品況複檢與包裝。",
+        "Tokyo Warehouse",
+        "2026-02-16T17:20:00Z",
+    )
+    _append_shipment_event(
+        1,
+        "shipped_jp",
+        "已從日本出貨",
+        "交由國際物流承運。",
+        "Narita",
+        "2026-02-17T09:10:00Z",
+    )
+    _append_shipment_event(
+        1,
+        "in_transit",
+        "國際運送中",
+        "航班已起飛，預計兩日後抵台。",
+        "NRT -> TPE",
+        "2026-02-17T14:50:00Z",
+    )
+    _append_shipment_event(
+        1,
+        "delivered",
+        "已送達",
+        "買家已簽收完成。",
+        "Taipei",
+        "2026-02-18T15:30:00Z",
+    )
+
+    _append_shipment_event(
+        7,
+        "payment_confirmed",
+        "付款確認",
+        "已收到款項，準備安排國際出貨。",
+        "Tokyo",
+        "2026-02-06T10:10:00Z",
+    )
+    _append_shipment_event(
+        7,
+        "preparing",
+        "備貨中",
+        "保卡與配件完成二次核對。",
+        "Tokyo Warehouse",
+        "2026-02-06T16:20:00Z",
+    )
+    _append_shipment_event(
+        7,
+        "shipped_jp",
+        "已從日本出貨",
+        "貨件已離開日本倉庫。",
+        "Haneda",
+        "2026-02-07T09:40:00Z",
+    )
+    _append_shipment_event(
+        7,
+        "customs_tw",
+        "台灣海關清關",
+        "已進入清關流程。",
+        "Taoyuan Customs",
+        "2026-02-07T19:35:00Z",
+    )
+    _append_shipment_event(
+        7,
+        "shipped_tw",
+        "台灣境內配送",
+        "交由宅配司機配送中。",
+        "Taiwan Local Hub",
+        "2026-02-08T08:10:00Z",
+    )
+
+    _append_shipment_event(
+        10,
+        "payment_confirmed",
+        "付款確認",
+        "高單價訂單已完成付款核對。",
+        "Tokyo",
+        "2026-01-12T10:10:00Z",
+    )
+    _append_shipment_event(
+        10,
+        "preparing",
+        "備貨中",
+        "完成防塵包裝與保固文件。",
+        "Tokyo Warehouse",
+        "2026-01-12T16:30:00Z",
+    )
+    _append_shipment_event(
+        10,
+        "shipped_jp",
+        "已從日本出貨",
+        "精品專線已接手出貨。",
+        "Narita",
+        "2026-01-13T08:55:00Z",
+    )
+    _append_shipment_event(
+        10,
+        "in_transit",
+        "國際運送中",
+        "航班運送至台灣中。",
+        "NRT -> TPE",
+        "2026-01-13T13:45:00Z",
+    )
+    _append_shipment_event(
+        10,
+        "delivered",
+        "已送達",
+        "買家完成驗收。",
+        "Taipei",
+        "2026-01-14T15:20:00Z",
+    )
+
+    _append_shipment_event(
+        4,
+        "payment_confirmed",
+        "付款確認",
+        "已收到款項，預計將從東京倉庫備貨出貨。",
+        "Tokyo",
+        "2026-02-25T15:00:00Z",
+    )
+    _append_shipment_event(
+        4,
+        "preparing",
+        "備貨中",
+        "Hermès Kelly 已完成品況複檢與防塵包裝。",
+        "Tokyo Warehouse",
+        "2026-02-26T10:30:00Z",
+    )
+
+    CATEGORIES.extend([
+        {"id": "watch", "title": "經典腕錶", "image": "/Watches.png"},
+        {"id": "bag", "title": "復古包款", "image": "/Handbags.png"},
+        {"id": "jewelry", "title": "珠寶飾品", "image": "/Jewelry.png"},
+        {"id": "apparel", "title": "珍藏服飾", "image": "/Apparel.png"},
+        {"id": "lifestyle", "title": "藝術擺件", "image": "/Lifestyle.png"},
+        {"id": "accessory", "title": "特選配件", "image": "/Wallets.png"},
+    ])
+    # Seed categories to DB
+    _cat_session = SessionLocal()
+    try:
+        from sqlalchemy import delete as _delete_cat
+        _cat_session.execute(_delete_cat(Category))
+        seed_cats = [
+            Category(id="watch", title_zh="經典腕錶", title_ja="クラシックウォッチ", title_en="Classic Watches", image_url="/Watches.png", sort_order=0),
+            Category(id="bag", title_zh="復古包款", title_ja="ヴィンテージバッグ", title_en="Vintage Bags", image_url="/Handbags.png", sort_order=1),
+            Category(id="jewelry", title_zh="珠寶飾品", title_ja="ジュエリー", title_en="Jewelry", image_url="/Jewelry.png", sort_order=2),
+            Category(id="apparel", title_zh="珍藏服飾", title_ja="コレクションアパレル", title_en="Apparel", image_url="/Apparel.png", sort_order=3),
+            Category(id="lifestyle", title_zh="藝術擺件", title_ja="ライフスタイル", title_en="Lifestyle", image_url="/Lifestyle.png", sort_order=4),
+            Category(id="accessory", title_zh="特選配件", title_ja="セレクトアクセサリー", title_en="Accessories", image_url="/Wallets.png", sort_order=5),
+        ]
+        _cat_session.add_all(seed_cats)
+        _cat_session.commit()
+    finally:
+        _cat_session.close()
     
     
 
@@ -917,6 +1598,9 @@ def reset_state() -> None:
                     name_en=str(item["name"]["en"]),
                     price_twd=int(item["price_twd"]),
                     grade=str(item["grade"]),
+                    description_zh=str(item.get("description", {}).get("zh-Hant", "")),
+                    description_ja=str(item.get("description", {}).get("ja", "")),
+                    description_en=str(item.get("description", {}).get("en", "")),
                 )
                 for item in PRODUCTS
             ]
@@ -925,7 +1609,7 @@ def reset_state() -> None:
     finally:
         session.close()
              
-    MAGAZINES.extend([{"id": 1, "brand": "Rolex", "contents": [{"title": {"zh-Hant": "時間的見證者：Rolex Submariner 5513", "ja": "時の証人：ロレックス サブマリーナ 5513", "en": "Witness of Time: Rolex Submariner 5513"}, "description": {"zh-Hant": "從深海到街頭，探討5513為何成為復古錶迷的終極指標。", "ja": "深海からストリートまで、なぜ5513がヴィンテージ時計ファンの究極の指標となったのか。", "en": "From the deep sea to the streets, why the 5513 is the ultimate grail for vintage collectors."}, "image_url": "https://images.unsplash.com/photo-1522312346375-d1a52e2b99b3?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80", "body": {"zh-Hant": "沒有繁複的日期窗，只有純粹的時間顯示。Submariner 5513 以其無曆設計和亞克力鏡面，散發著獨特的溫潤光澤。歲月在膏藥面上留下的痕跡，每一抹泛黃都在訴說著一段故事。這不僅是一只潛水錶，更是跨越世代的美學傳承。", "ja": "複雑な日付表示はなく、純粋な時間表示のみ。サブマリーナ5513は、カレンダーなしのデザインとアクリル風防により、独特の温かみのある輝きを放ちます。時が文字盤に残した痕跡、その黄ばみの一つ一つが物語を語っています。これは単なるダイバーズウォッチではなく、世代を超えた美学の継承です。", "en": "No complex date windows, just pure time display. The Submariner 5513, with its no-date design and acrylic crystal, emits a uniquely warm luster. The traces left by time on the dial—every touch of patina tells a story. This is not just a dive watch; it's an aesthetic heritage spanning generations."}, "status": "published", "published_at": "2026-02-01T09:00:00Z"}]}, {"id": 2, "brand": "Seven by Seven", "contents": [{"title": {"zh-Hant": "舊物的煉金術：Seven by Seven 的重構美學", "ja": "古物の錬金術：Seven by Seven の再構築の美学", "en": "Alchemy of the Old: The Reconstructed Aesthetics of Seven by Seven"}, "description": {"zh-Hant": "解構、拼接、再造。看川上淳也如何賦予老舊丹寧新的生命。", "ja": "解体、パッチワーク、再創造。川上淳也がいかにして古いデニムに新たな命を吹き込むか。", "en": "Deconstruction, patchwork, and recreation. How Junya Kawakami breathes new life into vintage denim."}, "image_url": "https://images.unsplash.com/photo-1542272604-78082c5f11cc?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80", "body": {"zh-Hant": "每一件 Seven by Seven 的重製單品都是一場與過去的對話。設計師親自挑選具有特殊褪色與磨損的老丹寧，將其解體後，以現代的廓形重新拼接。這不只是環保的升級再造，更是一種對時間痕跡的極致致敬。", "ja": "Seven by Seven のリメイクアイテムは、すべて過去との対話です。デザイナー自らが特殊な色落ちやスレのある古いデニムを選び、解体した後、現代的なシルエットで再構築します。これは単なる環境に配慮したアップサイクルではなく、時の痕跡に対する究極のオマージュです。", "en": "Every reconstructed piece from Seven by Seven is a conversation with the past. The designer personally selects vintage denim with unique fades and wear, deconstructs them, and pieces them back together in modern silhouettes. This is more than just eco-friendly upcycling; it's the ultimate homage to the traces of time."}, "status": "published", "published_at": "2026-02-15T09:00:00Z"}]}, {"id": 3, "brand": "Nanamica", "contents": [{"title": {"zh-Hant": "城市與自然的橋樑：Nanamica 的機能日常", "ja": "都市と自然の架け橋：Nanamica の機能的な日常", "en": "Bridge Between City and Nature: Nanamica's Functional Daily Wear"}, "description": {"zh-Hant": "將高科技面料隱藏於經典男裝輪廓之下，重新定義當代通勤裝束。", "ja": "ハイテク素材をクラシックなメンズウェアのシルエットに隠し、現代の通勤スタイルを再定義する。", "en": "Hiding high-tech fabrics beneath classic menswear silhouettes, redefining contemporary commuting attire."}, "image_url": "https://images.unsplash.com/photo-1551028719-00167b16eac5?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80", "body": {"zh-Hant": "『One Ocean, All Lands』是 Nanamica 的不變哲學。Gore-Tex Cruiser Jacket 完美體現了這一點。外觀是經典的軍裝風衣，內裡卻蘊含著頂級的防水透氣科技。無論是東京的梅雨季還是台北的午後雷陣雨，它都能讓你保持優雅與乾爽。", "ja": "「One Ocean, All Lands」は Nanamica の変わらぬ哲学です。Gore-Tex Cruiser Jacket はこれを完璧に体現しています。外見はクラシックなミリタリーコートですが、内側には最高クラスの防水透湿技術が隠されています。東京の梅雨でも台北の午後の雷雨でも、常にエレガントでドライな状態を保ちます。", "en": "'One Ocean, All Lands' is Nanamica's unchanging philosophy. The Gore-Tex Cruiser Jacket embodies this perfectly. It looks like a classic military coat on the outside, but conceals top-tier waterproof and breathable technology inside. Whether it's Tokyo's rainy season or Taipei's afternoon thunderstorms, it keeps you elegant and dry."}, "status": "published", "published_at": "2026-02-20T09:00:00Z"}]}])
+    MAGAZINES.extend([{"id": 1, "brand": "Rolex", "contents": [{"title": {"zh-Hant": "時間的見證者：Rolex Submariner 5513", "ja": "時の証人：ロレックス サブマリーナ 5513", "en": "Witness of Time: Rolex Submariner 5513"}, "description": {"zh-Hant": "從深海到街頭，探討5513為何成為復古錶迷的終極指標。", "ja": "深海からストリートまで、なぜ5513がヴィンテージ時計ファンの究極の指標となったのか。", "en": "From the deep sea to the streets, why the 5513 is the ultimate grail for vintage collectors."}, "image_url": "/Watches.png", "body": {"zh-Hant": "沒有繁複的日期窗，只有純粹的時間顯示。Submariner 5513 以其無曆設計和亞克力鏡面，散發著獨特的溫潤光澤。歲月在膏藥面上留下的痕跡，每一抹泛黃都在訴說著一段故事。這不僅是一只潛水錶，更是跨越世代的美學傳承。", "ja": "複雑な日付表示はなく、純粋な時間表示のみ。サブマリーナ5513は、カレンダーなしのデザインとアクリル風防により、独特の温かみのある輝きを放ちます。時が文字盤に残した痕跡、その黄ばみの一つ一つが物語を語っています。これは単なるダイバーズウォッチではなく、世代を超えた美学の継承です。", "en": "No complex date windows, just pure time display. The Submariner 5513, with its no-date design and acrylic crystal, emits a uniquely warm luster. The traces left by time on the dial—every touch of patina tells a story. This is not just a dive watch; it's an aesthetic heritage spanning generations."}, "status": "published", "published_at": "2026-02-01T09:00:00Z"}]}, {"id": 2, "brand": "Seven by Seven", "contents": [{"title": {"zh-Hant": "舊物的煉金術：Seven by Seven 的重構美學", "ja": "古物の錬金術：Seven by Seven の再構築の美学", "en": "Alchemy of the Old: The Reconstructed Aesthetics of Seven by Seven"}, "description": {"zh-Hant": "解構、拼接、再造。看川上淳也如何賦予老舊丹寧新的生命。", "ja": "解体、パッチワーク、再創造。川上淳也がいかにして古いデニムに新たな命を吹き込むか。", "en": "Deconstruction, patchwork, and recreation. How Junya Kawakami breathes new life into vintage denim."}, "image_url": "/Apparel.png", "body": {"zh-Hant": "每一件 Seven by Seven 的重製單品都是一場與過去的對話。設計師親自挑選具有特殊褪色與磨損的老丹寧，將其解體後，以現代的廓形重新拼接。這不只是環保的升級再造，更是一種對時間痕跡的極致致敬。", "ja": "Seven by Seven のリメイクアイテムは、すべて過去との対話です。デザイナー自らが特殊な色落ちやスレのある古いデニムを選び、解体した後、現代的なシルエットで再構築します。これは単なる環境に配慮したアップサイクルではなく、時の痕跡に対する究極のオマージュです。", "en": "Every reconstructed piece from Seven by Seven is a conversation with the past. The designer personally selects vintage denim with unique fades and wear, deconstructs them, and pieces them back together in modern silhouettes. This is more than just eco-friendly upcycling; it's the ultimate homage to the traces of time."}, "status": "published", "published_at": "2026-02-15T09:00:00Z"}]}, {"id": 3, "brand": "Nanamica", "contents": [{"title": {"zh-Hant": "城市與自然的橋樑：Nanamica 的機能日常", "ja": "都市と自然の架け橋：Nanamica の機能的な日常", "en": "Bridge Between City and Nature: Nanamica's Functional Daily Wear"}, "description": {"zh-Hant": "將高科技面料隱藏於經典男裝輪廓之下，重新定義當代通勤裝束。", "ja": "ハイテク素材をクラシックなメンズウェアのシルエットに隠し、現代の通勤スタイルを再定義する。", "en": "Hiding high-tech fabrics beneath classic menswear silhouettes, redefining contemporary commuting attire."}, "image_url": "/Apparel.png", "body": {"zh-Hant": "『One Ocean, All Lands』是 Nanamica 的不變哲學。Gore-Tex Cruiser Jacket 完美體現了這一點。外觀是經典的軍裝風衣，內裡卻蘊含著頂級的防水透氣科技。無論是東京的梅雨季還是台北的午後雷陣雨，它都能讓你保持優雅與乾爽。", "ja": "「One Ocean, All Lands」は Nanamica の変わらぬ哲学です。Gore-Tex Cruiser Jacket はこれを完璧に体現しています。外見はクラシックなミリタリーコートですが、内側には最高クラスの防水透湿技術が隠されています。東京の梅雨でも台北の午後の雷雨でも、常にエレガントでドライな状態を保ちます。", "en": "'One Ocean, All Lands' is Nanamica's unchanging philosophy. The Gore-Tex Cruiser Jacket embodies this perfectly. It looks like a classic military coat on the outside, but conceals top-tier waterproof and breathable technology inside. Whether it's Tokyo's rainy season or Taipei's afternoon thunderstorms, it keeps you elegant and dry."}, "status": "published", "published_at": "2026-02-20T09:00:00Z"}]}])
 
     article_id_cursor = 1
     for block in MAGAZINES:
@@ -938,6 +1622,57 @@ def reset_state() -> None:
                 content["gallery_urls"] = [str(content.get("image_url") or "")]
             article_id_cursor = max(article_id_cursor, int(content["article_id"]) + 1)
     next_mag_article_id = article_id_cursor
+    # Write magazine articles to DB
+    _mag_session = SessionLocal()
+    try:
+        import json as _json
+        _mag_session.execute(delete(MagazineArticle))
+        for brand_block in MAGAZINES:
+            brand = brand_block.get("brand", "")
+            for content in brand_block.get("contents", []):
+                article = MagazineArticle(
+                    id=int(content.get("article_id", 0)),
+                    brand=brand,
+                    slug=str(content.get("slug", "")),
+                    title_zh=str(content.get("title", {}).get("zh-Hant", "")),
+                    title_ja=str(content.get("title", {}).get("ja", "")),
+                    title_en=str(content.get("title", {}).get("en", "")),
+                    desc_zh=str(content.get("description", {}).get("zh-Hant", "")),
+                    desc_ja=str(content.get("description", {}).get("ja", "")),
+                    desc_en=str(content.get("description", {}).get("en", "")),
+                    body_zh=str(content.get("body", {}).get("zh-Hant", "")),
+                    body_ja=str(content.get("body", {}).get("ja", "")),
+                    body_en=str(content.get("body", {}).get("en", "")),
+                    image_url=str(content.get("image_url", "")),
+                    gallery_urls_json=_json.dumps(content.get("gallery_urls", [])),
+                    published=content.get("status", "published") == "published",
+                )
+                _mag_session.add(article)
+        _mag_session.commit()
+    finally:
+        _mag_session.close()
+
+    # Write costs seed data to MySQL
+    from datetime import date as _date
+    _cost_session = SessionLocal()
+    try:
+        from sqlalchemy import delete as _delete_cost
+        _cost_session.execute(_delete_cost(Cost))
+        for record in COST_RECORDS:
+            recorded = record.get("recorded_at", "2026-01-01")
+            if isinstance(recorded, str):
+                recorded = _date.fromisoformat(recorded)
+            _cost_session.add(Cost(
+                id=int(record["id"]),
+                title=str(record.get("title", record.get("category", ""))),
+                amount_twd=int(record["amount_twd"]),
+                recorded_at=recorded,
+                product_id=record.get("product_id"),
+                cost_type=str(record.get("type", record.get("cost_type", "misc"))),
+            ))
+        _cost_session.commit()
+    finally:
+        _cost_session.close()
 
 
 def bootstrap_state() -> None:
@@ -1054,14 +1789,12 @@ def refresh(payload: RefreshRequest) -> dict[str, str]:
 
 
 @app.get("/api/v1/auth/me")
-def me(authorization: str | None = Header(default=None)) -> dict[str, str]:
-    user = _current_user(authorization)
+def me(user: dict = Depends(_get_user_dict)) -> dict[str, str]:
     return {"email": user["email"], "role": user["role"], "display_name": user["display_name"]}
 
 
 @app.patch("/api/v1/users/me")
-def update_me(payload: UpdateProfilePayload, authorization: str | None = Header(default=None)) -> dict[str, str]:
-    user = _current_user(authorization)
+def update_me(payload: UpdateProfilePayload, user: dict = Depends(_get_user_dict)) -> dict[str, str]:
     display_name = payload.display_name.strip()
     if len(display_name) < 1 or len(display_name) > 24:
         raise HTTPException(status_code=400, detail="display_name must be 1-24 chars")
@@ -1070,8 +1803,7 @@ def update_me(payload: UpdateProfilePayload, authorization: str | None = Header(
 
 
 @app.get("/api/v1/users/dashboard-config")
-def user_dashboard_config(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def user_dashboard_config(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     return {
         "account_nav": [
             {"key": "orders", "title": "訂單歷史"},
@@ -1088,8 +1820,7 @@ def user_dashboard_config(authorization: str | None = Header(default=None)) -> d
 
 
 @app.get("/api/v1/users/growth")
-def user_growth_center(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def user_growth_center(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     total_spent = _user_total_spent(user["email"])
     membership = _resolve_membership(total_spent)
     points_balance = _user_points_balance(user["email"])
@@ -1124,9 +1855,8 @@ def user_growth_center(authorization: str | None = Header(default=None)) -> dict
 
 
 @app.get("/api/v1/users/private-salon")
-def user_private_salon(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
-    growth = user_growth_center(authorization)
+def user_private_salon(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    growth = user_growth_center(user)
     orders = [
         item
         for item in sorted(_user_orders(user["email"]), key=lambda row: int(row.get("id") or 0), reverse=True)
@@ -1173,9 +1903,8 @@ def user_private_salon(authorization: str | None = Header(default=None)) -> dict
 @app.post("/api/v1/users/notifications/read")
 def user_mark_notifications_read(
     payload: UserNotificationReadPayload,
-    authorization: str | None = Header(default=None),
+    user: dict = Depends(_get_user_dict),
 ) -> dict[str, Any]:
-    user = _current_user(authorization)
     notifications = _user_notifications(user["email"])
     latest_event_id = max([int(item.get("id") or 0) for item in notifications.get("items", [])], default=0)
 
@@ -1197,10 +1926,102 @@ def warehouse_timeline() -> dict[str, list[dict[str, Any]]]:
     return {"items": items}
 
 
+@app.post("/api/v1/admin/orders/{order_id}/shipment-events")
+def admin_create_shipment_event(
+    order_id: int,
+    payload: ShipmentEventPayload,
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    _require_admin(user)
+    event = _append_shipment_event(
+        order_id=order_id,
+        status=payload.status.strip(),
+        title=payload.title.strip(),
+        description=payload.description,
+        location=payload.location,
+        event_time=payload.event_time,
+    )
+    return event
+
+
+@app.get("/api/v1/admin/orders/{order_id}/shipment-events")
+def admin_get_order_shipment_events(
+    order_id: int,
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    _require_admin(user)
+    order = ORDERS.get(order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="order not found")
+    return {
+        "order_id": order_id,
+        "product_name": order.get("product_name"),
+        "buyer_email": order.get("buyer_email"),
+        "events": _shipment_events_for(order_id),
+    }
+
+
+@app.get("/api/v1/admin/shipments")
+def admin_shipments(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_admin(user)
+    visible_status = {"paid", "completed", "shipped"}
+    items: list[dict[str, Any]] = []
+
+    for order in sorted(ORDERS.values(), key=lambda row: int(row.get("id") or 0), reverse=True):
+        order_id = int(order.get("id") or 0)
+        events = _shipment_events_for(order_id)
+        has_events = len(events) > 0
+        if order.get("status") not in visible_status and not has_events:
+            continue
+        latest_event = events[-1] if has_events else None
+        items.append(
+            {
+                "order_id": order_id,
+                "buyer_email": order.get("buyer_email"),
+                "product_name": order.get("product_name"),
+                "order_status": order.get("status"),
+                "latest_status": (latest_event or {}).get("status"),
+                "latest_title": (latest_event or {}).get("title"),
+                "latest_event_time": (latest_event or {}).get("event_time"),
+                "event_count": len(events),
+            }
+        )
+
+    return {"items": items}
+
+
+@app.get("/api/v1/orders/{order_id}/shipment-events")
+def buyer_get_order_shipment_events(
+    order_id: int,
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    order = ORDERS.get(order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="order not found")
+    if user["role"] == "admin":
+        pass  # admin can view any order's shipment events
+    elif user["role"] == "buyer":
+        if order.get("buyer_email") != user["email"]:
+            raise HTTPException(status_code=403, detail="forbidden")
+    else:
+        raise HTTPException(status_code=403, detail="buyer or admin only")
+
+    return {
+        "events": _shipment_events_for(order_id),
+        "order": {
+            "id": order.get("id"),
+            "product_name": order.get("product_name"),
+            "status": order.get("status"),
+            "amount_twd": order.get("amount_twd"),
+            "final_amount_twd": order.get("final_amount_twd"),
+            "created_at": order.get("created_at"),
+        },
+    }
+
+
 @app.post("/api/v1/orders", status_code=201)
-def create_order(payload: OrderPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def create_order(payload: OrderPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     global next_order_id, next_room_id
-    user = _current_user(authorization)
     if payload.mode not in {"inquiry", "buy_now"}:
         raise HTTPException(status_code=400, detail="invalid mode")
     if next((item for item in PRODUCTS if item["id"] == payload.product_id), None) is None:
@@ -1218,6 +2039,7 @@ def create_order(payload: OrderPayload, authorization: str | None = Header(defau
         "buyer_email": user["email"],
         "product_id": payload.product_id,
         "product_name": product["name"]["zh-Hant"] if product else "",
+        "status": "open",
         "messages": [{"id": 1, "from": "system", "message": "諮詢室已建立", "timestamp": datetime.now(timezone.utc).isoformat()}],
         "shipping_quote": None,
     }
@@ -1297,12 +2119,11 @@ def create_order(payload: OrderPayload, authorization: str | None = Header(defau
         detail="買家建立專屬諮詢室並提交下單需求",
         payload={"buyer_email": user["email"], "product_id": payload.product_id, "mode": payload.mode},
     )
-    return {"order_id": order_id, "comm_room_id": room_id, "status": status}
+    return {"order_id": order_id, "room_id": room_id, "comm_room_id": room_id, "status": status}
 
 
 @app.get("/api/v1/orders/me")
-def my_orders(authorization: str | None = Header(default=None)) -> dict[str, list[dict[str, Any]]]:
-    user = _current_user(authorization)
+def my_orders(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
     items = [
         order
         for order in ORDERS.values()
@@ -1313,8 +2134,7 @@ def my_orders(authorization: str | None = Header(default=None)) -> dict[str, lis
 
 
 @app.get("/api/v1/comm-rooms/me")
-def my_comm_rooms(authorization: str | None = Header(default=None)) -> dict[str, list[dict[str, Any]]]:
-    user = _current_user(authorization)
+def my_comm_rooms(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
     rooms = [
         room
         for room in COMM_ROOMS.values()
@@ -1325,8 +2145,7 @@ def my_comm_rooms(authorization: str | None = Header(default=None)) -> dict[str,
 
 
 @app.get("/api/v1/comm-rooms/{room_id}")
-def get_comm_room(room_id: int, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def get_comm_room(room_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     room = COMM_ROOMS.get(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="room not found")
@@ -1350,8 +2169,7 @@ def get_comm_room(room_id: int, authorization: str | None = Header(default=None)
 
 
 @app.post("/api/v1/comm-rooms/{room_id}/messages")
-def send_comm_room_message(room_id: int, payload: CommRoomMessagePayload, authorization: str | None = Header(default=None)):
-    user = _current_user(authorization)
+def send_comm_room_message(room_id: int, payload: CommRoomMessagePayload, user: dict = Depends(_get_user_dict)):
     room = COMM_ROOMS.get(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="room not found")
@@ -1379,8 +2197,7 @@ def send_comm_room_message(room_id: int, payload: CommRoomMessagePayload, author
     return msg
 
 @app.post("/api/v1/comm-rooms/{room_id}/final-quote")
-def set_final_quote(room_id: int, payload: FinalQuotePayload, authorization: str | None = Header(default=None)):
-    user = _current_user(authorization)
+def set_final_quote(room_id: int, payload: FinalQuotePayload, user: dict = Depends(_get_user_dict)):
     _require_roles(user, ORDER_ADMIN_ROLES)
     room = COMM_ROOMS.get(room_id)
     if room is None:
@@ -1393,6 +2210,10 @@ def set_final_quote(room_id: int, payload: FinalQuotePayload, authorization: str
     order["shipping_fee_twd"] = payload.shipping_fee_twd
     order["discount_twd"] = payload.discount_twd
     order["final_amount_twd"] = payload.final_price_twd + payload.shipping_fee_twd - (payload.discount_twd or 0)
+    if payload.shipping_carrier is not None:
+        order["shipping_carrier"] = payload.shipping_carrier
+    if payload.tracking_number is not None:
+        order["tracking_number"] = payload.tracking_number
     order["status"] = "quoted"
     
     room.setdefault("messages", []).append({
@@ -1411,11 +2232,10 @@ def set_final_quote(room_id: int, payload: FinalQuotePayload, authorization: str
         detail="管理員更新商品、運費與折扣",
         payload={"buyer_email": room["buyer_email"], "final_amount_twd": order["final_amount_twd"]},
     )
-    return {"ok": True}
+    return {"ok": True, "status": "quote_sent"}
 
 @app.post("/api/v1/comm-rooms/{room_id}/accept-quote")
-def accept_quote(room_id: int, authorization: str | None = Header(default=None)):
-    user = _current_user(authorization)
+def accept_quote(room_id: int, user: dict = Depends(_get_user_dict)):
     room = COMM_ROOMS.get(room_id)
     if room is None or room["buyer_email"] != user["email"]:
         raise HTTPException(status_code=404, detail="room not found")
@@ -1443,8 +2263,7 @@ def accept_quote(room_id: int, authorization: str | None = Header(default=None))
     return {"ok": True}
 
 @app.post("/api/v1/comm-rooms/{room_id}/upload-proof")
-def upload_proof(room_id: int, payload: TransferProofPayload, authorization: str | None = Header(default=None)):
-    user = _current_user(authorization)
+def upload_proof(room_id: int, payload: TransferProofPayload, user: dict = Depends(_get_user_dict)):
     room = COMM_ROOMS.get(room_id)
     if room is None or room["buyer_email"] != user["email"]:
         raise HTTPException(status_code=404, detail="room not found")
@@ -1473,8 +2292,7 @@ def upload_proof(room_id: int, payload: TransferProofPayload, authorization: str
     return {"ok": True}
 
 @app.post("/api/v1/orders/{order_id}/confirm-payment")
-def confirm_manual_payment(order_id: int, authorization: str | None = Header(default=None)):
-    user = _current_user(authorization)
+def confirm_manual_payment(order_id: int, user: dict = Depends(_get_user_dict)):
     _require_roles(user, ORDER_ADMIN_ROLES)
     order = ORDERS.get(order_id)
     if not order:
@@ -1545,20 +2363,18 @@ def ecpay_callback(order_id: int = Query(...)) -> dict[str, Any]:
 
 
 @app.post("/api/v1/payments/ecpay/{order_id}")
-def create_ecpay_payment(order_id: int, authorization: str | None = Header(default=None)) -> dict[str, str]:
-    user = _current_user(authorization)
+def create_ecpay_payment(order_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     order = ORDERS.get(order_id)
     if order is None:
         raise HTTPException(status_code=404, detail="order not found")
     if order["buyer_email"] != user["email"]:
         raise HTTPException(status_code=403, detail="forbidden")
     check_mac = hashlib.md5(f"{order_id}:{order['buyer_email']}".encode("utf-8")).hexdigest()
-    return {"payload": f"MerchantTradeNo=WK{order_id}&CheckMacValue={check_mac}"}
+    return {"ok": True, "payload": f"MerchantTradeNo=WK{order_id}&CheckMacValue={check_mac}"}
 
 
 @app.post("/api/v1/orders/{order_id}/complete")
-def complete_order(order_id: int, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def complete_order(order_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_roles(user, ORDER_ADMIN_ROLES)
     order = ORDERS.get(order_id)
     if order is None:
@@ -1599,15 +2415,13 @@ def complete_order(order_id: int, authorization: str | None = Header(default=Non
 
 
 @app.get("/api/v1/admin/products")
-def admin_list_products(authorization: str | None = Header(default=None)) -> dict[str, list[dict[str, Any]]]:
-    user = _current_user(authorization)
+def admin_list_products(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
     _require_roles(user, PRODUCT_ADMIN_ROLES)
     return {"items": sorted(PRODUCTS, key=lambda item: int(item.get("id") or 0), reverse=True)}
 
 
 @app.get("/api/v1/admin/console-config")
-def admin_console_config(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_console_config(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_roles(user, PRODUCT_ADMIN_ROLES | ORDER_ADMIN_ROLES)
     return {
         "role": user["role"],
@@ -1622,8 +2436,7 @@ def admin_console_config(authorization: str | None = Header(default=None)) -> di
 
 
 @app.get("/api/v1/admin/overview")
-def admin_overview(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_overview(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_roles(user, PRODUCT_ADMIN_ROLES | ORDER_ADMIN_ROLES)
     orders = sorted(ORDERS.values(), key=lambda item: item["id"], reverse=True)
     metrics = {
@@ -1636,8 +2449,7 @@ def admin_overview(authorization: str | None = Header(default=None)) -> dict[str
 
 
 @app.get("/api/v1/admin/orders")
-def admin_orders(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_orders(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_roles(user, ORDER_ADMIN_ROLES)
     
     # We must format the response securely including missing fields like buyer_email if not present
@@ -1654,12 +2466,11 @@ def admin_orders(authorization: str | None = Header(default=None)) -> dict[str, 
             "final_amount_twd": item.get("final_amount_twd", item.get("amount_twd", 0)),
             "created_at": item.get("created_at"),
         })
-    return {"items": results}
+    return {"items": results, "total": len(results)}
 
 
 @app.get("/api/v1/admin/workflow-queues")
-def admin_workflow_queues(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_workflow_queues(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_roles(user, ORDER_ADMIN_ROLES)
 
     stage_map = {
@@ -1708,9 +2519,8 @@ def admin_workflow_queues(authorization: str | None = Header(default=None)) -> d
 def admin_patch_order_status(
     order_id: int,
     payload: AdminOrderStatusPayload,
-    authorization: str | None = Header(default=None),
+    user: dict = Depends(_get_user_dict),
 ) -> dict[str, Any]:
-    user = _current_user(authorization)
     _require_roles(user, ORDER_ADMIN_ROLES)
     order = ORDERS.get(order_id)
     if order is None:
@@ -1757,8 +2567,7 @@ def admin_patch_order_status(
 
 
 @app.get("/api/v1/admin/events")
-def admin_events(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_events(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_roles(user, ORDER_ADMIN_ROLES)
     rows = sorted(EVENT_LOGS, key=lambda row: int(row.get("id") or 0), reverse=True)
     return {"items": rows[:100]}
@@ -1767,9 +2576,8 @@ def admin_events(authorization: str | None = Header(default=None)) -> dict[str, 
 @app.post("/api/v1/admin/events/read")
 def admin_mark_events_read(
     payload: AdminNotificationReadPayload,
-    authorization: str | None = Header(default=None),
+    user: dict = Depends(_get_user_dict),
 ) -> dict[str, Any]:
-    user = _current_user(authorization)
     _require_roles(user, ORDER_ADMIN_ROLES)
     USER_NOTIFICATION_CURSOR[user["email"]] = max(0, int(payload.last_event_id))
     return {"ok": True, "last_event_id": USER_NOTIFICATION_CURSOR[user["email"]]}
@@ -1777,9 +2585,8 @@ def admin_mark_events_read(
 
 @app.post("/api/v1/admin/products", status_code=201)
 def admin_create_product(
-    payload: AdminProductPayload, authorization: str | None = Header(default=None)
+    payload: AdminProductPayload, user: dict = Depends(_get_user_dict)
 ) -> dict[str, Any]:
-    user = _current_user(authorization)
     _require_roles(user, PRODUCT_ADMIN_ROLES)
 
     normalized_name = _normalize_product_name(payload.name, payload.sku)
@@ -1820,9 +2627,8 @@ def admin_create_product(
 def admin_update_product(
     product_id: int,
     payload: AdminProductUpdatePayload,
-    authorization: str | None = Header(default=None),
+    user: dict = Depends(_get_user_dict),
 ) -> dict[str, Any]:
-    user = _current_user(authorization)
     _require_roles(user, PRODUCT_ADMIN_ROLES)
 
     cache_item = _find_product_cache(product_id)
@@ -1867,8 +2673,7 @@ def admin_update_product(
 
 
 @app.delete("/api/v1/admin/products/{product_id}")
-def admin_delete_product(product_id: int, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_delete_product(product_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_roles(user, PRODUCT_ADMIN_ROLES)
 
     cache_item = _find_product_cache(product_id)
@@ -1886,8 +2691,7 @@ def admin_delete_product(product_id: int, authorization: str | None = Header(def
 
 
 @app.get("/api/v1/admin/orders/export.csv")
-def admin_export_orders_csv(authorization: str | None = Header(default=None)) -> Response:
-    user = _current_user(authorization)
+def admin_export_orders_csv(user: dict = Depends(_get_user_dict)) -> Response:
     _require_roles(user, ORDER_ADMIN_ROLES)
     rows = ["order_id,buyer_email,status,mode"]
     for order in ORDERS.values():
@@ -1895,208 +2699,75 @@ def admin_export_orders_csv(authorization: str | None = Header(default=None)) ->
     return Response(content="\n".join(rows), media_type="text/csv")
 
 
-@app.get("/api/v1/categories")
-def get_categories() -> dict[str, list[dict[str, Any]]]:
-    return {"items": CATEGORIES}
-
-@app.get("/api/v1/magazines")
-def get_magazines() -> dict[str, list[dict[str, Any]]]:
-    return {"items": MAGAZINES, "articles": _flatten_magazine_articles()}
-
-
-@app.get("/api/v1/admin/magazines/articles")
-def admin_list_magazine_articles(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
-    _require_roles(user, FULL_ADMIN_ROLES)
-    return {"items": _flatten_magazine_articles()}
-
-
-@app.post("/api/v1/admin/magazines/articles", status_code=201)
-def admin_create_magazine_article(
-    payload: MagazineArticleCreatePayload, authorization: str | None = Header(default=None)
-) -> dict[str, Any]:
-    global next_mag_article_id
-    user = _current_user(authorization)
-    _require_roles(user, FULL_ADMIN_ROLES)
-
-    normalized_title = _normalize_locale_text(payload.title, "Untitled")
-    normalized_description = _normalize_locale_text(payload.description, normalized_title["zh-Hant"])
-    normalized_body = _normalize_locale_text(payload.body, normalized_description["zh-Hant"])
-    gallery_urls = [url.strip() for url in (payload.gallery_urls or []) if url.strip()]
-    if not gallery_urls:
-        gallery_urls = [payload.image_url]
-    slug = _slugify(payload.slug or normalized_title["en"] or normalized_title["zh-Hant"])
-
-    brand_block = _ensure_magazine_brand(payload.brand)
-    article = {
-        "article_id": next_mag_article_id,
-        "slug": slug,
-        "title": normalized_title,
-        "description": normalized_description,
-        "body": normalized_body,
-        "image_url": payload.image_url,
-        "gallery_urls": gallery_urls,
-        "status": payload.status,
-        "published_at": payload.published_at or datetime.now(timezone.utc).isoformat(),
-    }
-    next_mag_article_id += 1
-    brand_block.setdefault("contents", []).append(article)
-    return {
-        "article_id": article["article_id"],
-        "slug": article["slug"],
-        "brand": brand_block["brand"],
-        "title": article["title"],
-        "description": article["description"],
-        "body": article["body"],
-        "image_url": article["image_url"],
-        "gallery_urls": article.get("gallery_urls", [article["image_url"]]),
-        "status": article["status"],
-        "published_at": article["published_at"],
-    }
-
-
-@app.patch("/api/v1/admin/magazines/articles/{article_id}")
-def admin_update_magazine_article(
-    article_id: int,
-    payload: MagazineArticleUpdatePayload,
-    authorization: str | None = Header(default=None),
-) -> dict[str, Any]:
-    user = _current_user(authorization)
-    _require_roles(user, FULL_ADMIN_ROLES)
-
-    brand_block, article = _find_magazine_article(article_id)
-    next_brand = payload.brand.strip() if payload.brand else brand_block["brand"]
-    if payload.title is not None:
-        article["title"] = _normalize_locale_text(payload.title, article["title"]["zh-Hant"])
-    if payload.description is not None:
-        article["description"] = _normalize_locale_text(payload.description, article["description"]["zh-Hant"])
-    if payload.body is not None:
-        article["body"] = _normalize_locale_text(payload.body, article.get("body", {}).get("zh-Hant", article["description"]["zh-Hant"]))
-    if payload.image_url is not None:
-        article["image_url"] = payload.image_url
-    if payload.gallery_urls is not None:
-        article["gallery_urls"] = [url.strip() for url in payload.gallery_urls if url.strip()]
-    if not article.get("gallery_urls"):
-        article["gallery_urls"] = [article.get("image_url", "")]
-    if payload.status is not None:
-        article["status"] = payload.status
-    if payload.published_at is not None:
-        article["published_at"] = payload.published_at
-    if payload.slug is not None:
-        article["slug"] = _slugify(payload.slug)
-    elif payload.title is not None:
-        article["slug"] = _slugify(article["title"]["en"] or article["title"]["zh-Hant"])
-
-    if brand_block["brand"].lower() != next_brand.lower():
-        brand_block["contents"] = [item for item in brand_block.get("contents", []) if int(item.get("article_id") or 0) != article_id]
-        target = _ensure_magazine_brand(next_brand)
-        target.setdefault("contents", []).append(article)
-        brand_block = target
-
-    return {
-        "article_id": article["article_id"],
-        "slug": article["slug"],
-        "brand": brand_block["brand"],
-        "title": article["title"],
-        "description": article["description"],
-        "body": article.get("body", {}),
-        "image_url": article["image_url"],
-        "gallery_urls": article.get("gallery_urls", [article["image_url"]]),
-        "status": article.get("status", "published"),
-        "published_at": article.get("published_at"),
-    }
-
-
-@app.delete("/api/v1/admin/magazines/articles/{article_id}")
-def admin_delete_magazine_article(article_id: int, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
-    _require_roles(user, FULL_ADMIN_ROLES)
-
-    for block in MAGAZINES:
-        before = len(block.get("contents", []))
-        block["contents"] = [item for item in block.get("contents", []) if int(item.get("article_id") or 0) != article_id]
-        if len(block["contents"]) != before:
-            return {"ok": True}
-    raise HTTPException(status_code=404, detail="magazine article not found")
 
 @app.get("/api/v1/admin/users")
-def admin_list_users(authorization: str | None = Header(default=None)) -> dict[str, list[dict[str, Any]]]:
-    user = _current_user(authorization)
+def admin_list_users(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
     _require_admin(user)
     return {"items": USERS_LIST}
 
 @app.get("/api/v1/admin/comm-rooms")
-def admin_comm_rooms(authorization: str | None = Header(default=None)) -> dict[str, list[dict[str, Any]]]:
-    user = _current_user(authorization)
+def admin_comm_rooms(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
     _require_roles(user, ORDER_ADMIN_ROLES)
     rooms = list(COMM_ROOMS.values())
     rooms.sort(key=lambda r: r["id"], reverse=True)
     return {"items": rooms}
 
+@app.get("/api/v1/admin/comm-rooms/{room_id}")
+def admin_get_comm_room(room_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_roles(user, ORDER_ADMIN_ROLES)
+    room = COMM_ROOMS.get(room_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="room not found")
+    order = next((o for o in ORDERS.values() if o.get("comm_room_id") == room_id), None)
+    room_copy = dict(room)
+    if order:
+        room_copy["order_id"] = order["id"]
+        room_copy["order"] = {
+            "id": order["id"],
+            "amount_twd": order.get("amount_twd"),
+            "discount_twd": order.get("discount_twd", 0),
+            "final_price_twd": order.get("final_price_twd"),
+            "shipping_fee_twd": order.get("shipping_fee_twd", 0),
+            "final_amount_twd": order.get("final_amount_twd"),
+            "shipping_carrier": order.get("shipping_carrier"),
+            "tracking_number": order.get("tracking_number"),
+            "status": order.get("status"),
+        }
+        product = next((p for p in PRODUCTS if p["id"] == order.get("product_id")), None)
+        if product and product.get("image_urls"):
+            room_copy["product_image_url"] = product["image_urls"][0]
+    return room_copy
+
+
 @app.get("/api/v1/admin/revenue")
-def admin_revenue(authorization: str | None = Header(default=None)) -> dict[str, list[dict[str, Any]]]:
-    user = _current_user(authorization)
+def admin_revenue(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
     _require_admin(user)
     return {"items": REVENUE_RECORDS}
 
 
-@app.post("/api/v1/reviews", status_code=201)
-def create_review(payload: ReviewPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    global next_review_id
-    user = _current_user(authorization)
-    order = ORDERS.get(payload.order_id)
-    if order is None:
-        raise HTTPException(status_code=404, detail="order not found")
-    if order.get("buyer_email") != user["email"]:
-        raise HTTPException(status_code=403, detail="forbidden")
-    if order.get("status") != "completed":
-        raise HTTPException(status_code=400, detail="order is not completed")
-    if any(item.get("order_id") == payload.order_id for item in REVIEWS):
-        raise HTTPException(status_code=409, detail="review already exists")
-
-    review = {
-        "id": next_review_id,
-        "order_id": payload.order_id,
-        "product_id": order.get("product_id"),
-        "buyer_email": user["email"],
-        "rating": payload.rating,
-        "quality_rating": payload.quality_rating,
-        "delivery_rating": payload.delivery_rating,
-        "service_rating": payload.service_rating,
-        "comment": payload.comment,
-        "media_urls": [url.strip() for url in (payload.media_urls or []) if url.strip()],
-        "anonymous": payload.anonymous,
-        "hidden": False,
-        "seller_reply": "",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+@app.post("/api/v1/admin/revenue", status_code=201)
+def admin_create_revenue(payload: RevenueRecordPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    global next_revenue_id
+    _require_admin(user)
+    row: dict[str, Any] = {
+        "id": next_revenue_id,
+        "title": payload.title,
+        "amount_twd": payload.amount_twd,
+        "recorded_at": payload.recorded_at or datetime.now(timezone.utc).date().isoformat(),
+        "note": payload.note,
+        "type": "manual",
     }
-    next_review_id += 1
-    REVIEWS.append(review)
-    POINTS_LOGS.append(
-        {
-            "id": len(POINTS_LOGS) + 1,
-            "email": user["email"],
-            "delta_points": 30,
-            "reason": f"訂單 #{payload.order_id} 評價回饋",
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-        }
-    )
-    _append_event(
-        "review.created",
-        user["email"],
-        user["role"],
-        order_id=payload.order_id,
-        room_id=order.get("comm_room_id"),
-        title="提交評價",
-        detail="買家完成交易評價",
-        payload={"buyer_email": user["email"], "rating": payload.rating},
-    )
-    return review
+    next_revenue_id += 1
+    REVENUE_RECORDS.append(row)
+    return row
+
+@app.post("/api/v1/reviews", status_code=501)
+def create_review(payload: ReviewPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    raise HTTPException(status_code=501, detail="review feature not yet implemented")
 
 
 @app.get("/api/v1/admin/reviews")
-def admin_list_reviews(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_list_reviews(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_roles(user, ORDER_ADMIN_ROLES)
     rows = sorted(REVIEWS, key=lambda item: int(item.get("id") or 0), reverse=True)
     return {"items": rows}
@@ -2104,9 +2775,8 @@ def admin_list_reviews(authorization: str | None = Header(default=None)) -> dict
 
 @app.patch("/api/v1/admin/reviews/{review_id}")
 def admin_moderate_review(
-    review_id: int, payload: ReviewModerationPayload, authorization: str | None = Header(default=None)
+    review_id: int, payload: ReviewModerationPayload, user: dict = Depends(_get_user_dict)
 ) -> dict[str, Any]:
-    user = _current_user(authorization)
     _require_roles(user, ORDER_ADMIN_ROLES)
     target = next((item for item in REVIEWS if int(item.get("id") or 0) == review_id), None)
     if target is None:
@@ -2119,9 +2789,8 @@ def admin_moderate_review(
 
 
 @app.post("/api/v1/admin/costs", status_code=201)
-def admin_create_cost(payload: CostRecordPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def admin_create_cost(payload: CostRecordPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     global next_cost_id
-    user = _current_user(authorization)
     _require_admin(user)
     row = {
         "id": next_cost_id,
@@ -2136,17 +2805,15 @@ def admin_create_cost(payload: CostRecordPayload, authorization: str | None = He
 
 
 @app.get("/api/v1/admin/costs")
-def admin_list_costs(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_list_costs(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_admin(user)
     return {"items": sorted(COST_RECORDS, key=lambda item: int(item.get("id") or 0), reverse=True)}
 
 
 @app.post("/api/v1/admin/points-policy")
 def admin_update_points_policy(
-    payload: PointsPolicyPayload, authorization: str | None = Header(default=None)
+    payload: PointsPolicyPayload, user: dict = Depends(_get_user_dict)
 ) -> dict[str, Any]:
-    user = _current_user(authorization)
     _require_admin(user)
     POINTS_POLICY.update(
         {
@@ -2160,15 +2827,13 @@ def admin_update_points_policy(
 
 
 @app.get("/api/v1/admin/points-policy")
-def admin_get_points_policy(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_get_points_policy(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_admin(user)
     return POINTS_POLICY
 
 
 @app.get("/api/v1/admin/report/summary")
-def admin_report_summary(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_report_summary(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_admin(user)
     revenue_sum = sum(int(item.get("amount_twd") or 0) for item in REVENUE_RECORDS)
     cost_sum = sum(int(item.get("amount_twd") or 0) for item in COST_RECORDS)
@@ -2201,10 +2866,30 @@ def admin_report_summary(authorization: str | None = Header(default=None)) -> di
     }
 
 
+@app.get("/api/v1/admin/report/monthly")
+def admin_report_monthly(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_admin(user)
+    month_map: dict[str, dict[str, int]] = {}
+    for item in REVENUE_RECORDS:
+        raw_date = str(item.get("recorded_at") or "")
+        month_key = raw_date[:7] if len(raw_date) >= 7 else "unknown"
+        month_map.setdefault(month_key, {"income": 0, "cost": 0})
+        month_map[month_key]["income"] += int(item.get("amount_twd") or 0)
+    for item in COST_RECORDS:
+        raw_date = str(item.get("recorded_at") or "")
+        month_key = raw_date[:7] if len(raw_date) >= 7 else "unknown"
+        month_map.setdefault(month_key, {"income": 0, "cost": 0})
+        month_map[month_key]["cost"] += int(item.get("amount_twd") or 0)
+    months = []
+    for key in sorted(month_map.keys()):
+        income = month_map[key]["income"]
+        cost = month_map[key]["cost"]
+        months.append({"month": key, "income_twd": income, "cost_twd": cost, "profit_twd": income - cost})
+    return {"months": months}
+
 
 @app.get("/api/v1/admin/crm/buyers/{email}/history")
-def get_buyer_history(email: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def get_buyer_history(email: str, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_roles(user, ORDER_ADMIN_ROLES)
     
     buyer_orders = [o for o in ORDERS.values() if o.get("buyer_email") == email]
@@ -2232,9 +2917,8 @@ def get_buyer_history(email: str, authorization: str | None = Header(default=Non
 def add_buyer_note(
     email: str,
     payload: AdminCrmNotePayload,
-    authorization: str | None = Header(default=None),
+    user: dict = Depends(_get_user_dict),
 ) -> dict[str, Any]:
-    user = _current_user(authorization)
     _require_roles(user, ORDER_ADMIN_ROLES)
     note_text = payload.note.strip()
     if not note_text:
@@ -2261,9 +2945,8 @@ def add_buyer_note(
 def add_buyer_reward(
     email: str,
     payload: AdminRewardPayload,
-    authorization: str | None = Header(default=None),
+    user: dict = Depends(_get_user_dict),
 ) -> dict[str, Any]:
-    user = _current_user(authorization)
     _require_roles(user, ORDER_ADMIN_ROLES)
     if payload.points == 0:
         raise HTTPException(status_code=400, detail="points must not be zero")
@@ -2287,14 +2970,12 @@ def add_buyer_reward(
 
 
 @app.get("/api/v1/users/coupons")
-def user_coupons(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def user_coupons(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     return {"items": _user_coupons(user["email"])}
 
 
 @app.get("/api/v1/users/coupons/available")
-def user_available_coupons(order_amount_twd: int = Query(default=0), authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def user_available_coupons(order_amount_twd: int = Query(default=0), user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     all_coupons = _user_coupons(user["email"])
     available = [
         c for c in all_coupons if c["is_usable"] and order_amount_twd >= c["coupon"].get("min_order_twd", 0)
@@ -2303,16 +2984,14 @@ def user_available_coupons(order_amount_twd: int = Query(default=0), authorizati
 
 
 @app.get("/api/v1/gacha/status")
-def gacha_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def gacha_status(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     draws = GACHA_DRAW_QUOTA.get(user["email"], 0)
     pool = next((p for p in GACHA_POOLS if p.get("is_default") and p.get("active")), None)
     return {"draws_available": draws, "pool": pool}
 
 
 @app.post("/api/v1/gacha/draw")
-def gacha_draw(payload: GachaDrawRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def gacha_draw(payload: GachaDrawRequest, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     draws = GACHA_DRAW_QUOTA.get(user["email"], 0)
     if draws <= 0:
         raise HTTPException(status_code=400, detail="no draws available")
@@ -2336,16 +3015,14 @@ def gacha_draw(payload: GachaDrawRequest, authorization: str | None = Header(def
 
 
 @app.get("/api/v1/admin/coupons")
-def admin_list_coupons(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_list_coupons(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_admin(user)
     return {"items": COUPONS}
 
 
 @app.post("/api/v1/admin/coupons", status_code=201)
-def admin_create_coupon(payload: CouponCreatePayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def admin_create_coupon(payload: CouponCreatePayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     global next_coupon_id
-    user = _current_user(authorization)
     _require_admin(user)
     if payload.type not in ("fixed", "percentage"):
         raise HTTPException(status_code=400, detail="type must be 'fixed' or 'percentage'")
@@ -2366,8 +3043,7 @@ def admin_create_coupon(payload: CouponCreatePayload, authorization: str | None 
 
 
 @app.post("/api/v1/admin/coupons/issue", status_code=201)
-def admin_issue_coupon(payload: AdminIssueCouponPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_issue_coupon(payload: AdminIssueCouponPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_admin(user)
     entry = _issue_coupon_to_user(payload.coupon_id, payload.user_email, "admin", expires_days=payload.expires_days)
     _append_event(
@@ -2382,16 +3058,14 @@ def admin_issue_coupon(payload: AdminIssueCouponPayload, authorization: str | No
 
 
 @app.get("/api/v1/admin/gacha/pools")
-def admin_list_gacha_pools(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_list_gacha_pools(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_admin(user)
     return {"items": GACHA_POOLS}
 
 
 @app.post("/api/v1/admin/gacha/pools", status_code=201)
-def admin_create_gacha_pool(payload: GachaPoolCreatePayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+def admin_create_gacha_pool(payload: GachaPoolCreatePayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     global next_gacha_pool_id
-    user = _current_user(authorization)
     _require_admin(user)
     if payload.is_default:
         for p in GACHA_POOLS:
@@ -2411,8 +3085,7 @@ def admin_create_gacha_pool(payload: GachaPoolCreatePayload, authorization: str 
 
 
 @app.post("/api/v1/admin/gacha/grant-draws", status_code=201)
-def admin_grant_draws(payload: AdminGrantDrawsPayload, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    user = _current_user(authorization)
+def admin_grant_draws(payload: AdminGrantDrawsPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
     _require_admin(user)
     if payload.draws <= 0:
         raise HTTPException(status_code=400, detail="draws must be positive")
@@ -2426,3 +3099,87 @@ def admin_grant_draws(payload: AdminGrantDrawsPayload, authorization: str | None
         payload={"buyer_email": payload.user_email, "draws": payload.draws},
     )
     return {"ok": True, "draws_available": GACHA_DRAW_QUOTA[payload.user_email]}
+
+# Admin login and refresh-token are handled by auth_router_module.admin_router (included above)
+
+
+# ── Shipment tracking endpoints ─────────────────────────────────────────────
+
+
+@app.post("/api/v1/admin/orders/{order_id}/shipment-events", status_code=201)
+def admin_add_shipment_event(order_id: int, payload: ShipmentEventPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_admin(user)
+    event = _append_shipment_event(
+        order_id,
+        payload.status,
+        payload.title,
+        payload.description,
+        payload.location,
+        payload.event_time,
+    )
+    return {"ok": True, "event": event}
+
+
+@app.get("/api/v1/admin/orders/{order_id}/shipment-events")
+def admin_get_shipment_events(order_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    order_obj = ORDERS.get(order_id)
+    if order_obj is None:
+        raise HTTPException(status_code=404, detail="order not found")
+    return {
+        "order_id": order_id,
+        "product_name": order_obj.get("product_name"),
+        "buyer_email": order_obj.get("buyer_email"),
+        "events": _shipment_events_for(order_id),
+    }
+
+
+@app.get("/api/v1/admin/shipments")
+def admin_list_shipments(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_admin(user)
+    items = []
+    for order_id, order in ORDERS.items():
+        events = _shipment_events_for(order_id)
+        latest = events[-1] if events else None
+        items.append({
+            "order_id": order_id,
+            "buyer_email": order.get("buyer_email"),
+            "product_name": order.get("product_name"),
+            "order_status": order.get("status"),
+            "latest_status": latest.get("status") if latest else None,
+            "latest_title": latest.get("title") if latest else None,
+            "latest_event_time": latest.get("event_time") if latest else None,
+            "event_count": len(events),
+        })
+    items.sort(key=lambda x: x["order_id"], reverse=True)
+    return {"items": items}
+
+
+@app.get("/api/v1/orders/{order_id}/shipment-events")
+def buyer_get_shipment_events(order_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    email = user["email"]
+    order = ORDERS.get(order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="order not found")
+    if user.get("role") != "admin" and order.get("buyer_email") != email:
+        raise HTTPException(status_code=403, detail="forbidden")
+    return {"order_id": order_id, "events": _shipment_events_for(order_id)}
+
+
+@app.get("/api/v1/orders/my/shipments")
+def buyer_list_my_shipments(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    email = user["email"]
+    items = []
+    for order_id, order in ORDERS.items():
+        if order.get("buyer_email") != email:
+            continue
+        events = _shipment_events_for(order_id)
+        latest = events[-1] if events else None
+        items.append({
+            "order_id": order_id,
+            "product_name": order.get("product_name"),
+            "status": order.get("status"),
+            "events": events,
+            "latest_event": latest,
+        })
+    items.sort(key=lambda x: x["order_id"], reverse=True)
+    return {"items": items}

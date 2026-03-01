@@ -32,9 +32,9 @@ def get_current_user(
     return user
 
 
-def require_role(required_role: str) -> Callable[[User], User]:
+def require_role(required_roles: list[str]) -> Callable[[User], User]:
     def guard(current_user: User = Depends(get_current_user)) -> User:
-        if current_user.role != required_role:
+        if current_user.role not in required_roles:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
         return current_user
 
