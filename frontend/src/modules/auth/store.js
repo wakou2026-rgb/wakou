@@ -75,6 +75,27 @@ export const useAuthStore = defineStore("auth", {
     setDisplayName(nextName) {
       this.displayName = nextName;
       storage.setItem("wakou_display_name", this.displayName);
+    },
+    async refreshTokens() {
+      const rt = this.refreshToken;
+      if (!rt) return false;
+      try {
+        const response = await fetch("/api/v1/auth/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: rt })
+        });
+        if (!response.ok) {
+          this.logout();
+          return false;
+        }
+        const data = await response.json();
+        this.accessToken = data.access_token;
+        storage.setItem("wakou_access_token", this.accessToken);
+        return true;
+      } catch {
+        return false;
+      }
     }
   }
 });

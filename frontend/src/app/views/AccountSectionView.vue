@@ -1,14 +1,137 @@
 <script setup>
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
+const { t, locale } = useI18n();
 import { useAuthStore } from "../../modules/auth/store";
-import { fetchPrivateSalon, markNotificationsRead, fetchMyCoupons, fetchGachaStatus, performGachaDraw } from "../../modules/account/service";
+import { fetchPrivateSalon, markNotificationsRead, fetchMyCoupons, fetchGachaStatus, performGachaDraw, submitOrderReview, fetchOrderReview } from "../../modules/account/service";
 import { deriveMembershipSnapshot, shouldClearUnreadOnRoute } from "../../modules/account/membership";
 import { hasCouponReward, shouldForceLogin } from "../../modules/account/gacha-view-state";
 
+// ─── Shipment tracking (integrated from WarehouseView) ───────────────────────
+const shipmentLoading = ref(false);
+const shipmentError = ref("");
+const shipmentCards = ref([]);
+const expandedCards = ref(new Set());
+
+const stageSequence = [
+  "payment_confirmed",
+  "preparing",
+  "shipped_jp",
+  "in_transit",
+  "customs_tw",
+  "shipped_tw",
+  "delivered"
+];
+
+function statusLabelShipment(status) {
+  const key = `shipment.status.${status || ""}`;
+  const translated = t(key);
+  return translated === key ? String(status || "-") : translated;
+}
+
+function formatEventTime(value) {
+  if (!value) return "";
+  const lang = locale.value === "ja" ? "ja-JP" : locale.value === "en" ? "en-US" : "zh-TW";
+  return new Date(value).toLocaleString(lang, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function currentStageIndex(events) {
+  let maxIndex = -1;
+  for (const event of events) {
+    const idx = stageSequence.indexOf(String(event?.status || ""));
+    if (idx > maxIndex) maxIndex = idx;
+  }
+  return maxIndex;
+}
+
+function normalizeCard(order, events) {
+  const latest = events.length ? events[events.length - 1] : null;
+  const stageIndex = currentStageIndex(events);
+  const steps = stageSequence.map((stage, index) => {
+    const eventForStage = [...events].reverse().find((ev) => ev.status === stage) || null;
+    return {
+      stage,
+      completed: stageIndex >= index,
+      current: stageIndex === index,
+      event: eventForStage
+    };
+  });
+  return {
+    id: Number(order.id),
+    productName: order.product_name,
+    orderStatus: order.status,
+    latestStatus: latest?.status || "",
+    latestTitle: latest?.title || "",
+    latestStageIndex: stageIndex,
+    events,
+    steps
+  };
+}
+
+function toggleCard(id) {
+  if (expandedCards.value.has(id)) {
+    expandedCards.value.delete(id);
+  } else {
+    expandedCards.value.add(id);
+  }
+  expandedCards.value = new Set(expandedCards.value);
+}
+
+function getAccessToken() {
+  return authStore.accessToken || (typeof window !== "undefined" ? window.localStorage.getItem("wakou_access_token") : "") || "";
+}
+
+function authHeaders() {
+  return { Authorization: `Bearer ${getAccessToken()}` };
+}
+
+async function loadShipments() {
+  shipmentLoading.value = true;
+  shipmentError.value = "";
+  shipmentCards.value = [];
+  try {
+    let ordersResponse = await fetch("/api/v1/orders/me", { method: "GET", headers: authHeaders() });
+    if (ordersResponse.status === 401) {
+      const refreshed = await authStore.refreshTokens();
+      if (!refreshed) throw new Error("load orders failed (401)");
+      ordersResponse = await fetch("/api/v1/orders/me", { method: "GET", headers: authHeaders() });
+    }
+    if (!ordersResponse.ok) throw new Error(`load orders failed (${ordersResponse.status})`);
+    const ordersData = await ordersResponse.json();
+    const allOrders = Array.isArray(ordersData?.items) ? ordersData.items : [];
+    const candidates = allOrders.filter((o) => ["paid", "completed", "shipped"].includes(String(o?.status || "")));
+    if (!candidates.length) return;
+    const results = await Promise.all(
+      candidates.map(async (order) => {
+        const res = await fetch(`/api/v1/orders/${order.id}/shipment-events`, { method: "GET", headers: authHeaders() });
+        if (!res.ok) return { order, events: [] };
+        const payload = await res.json();
+        return { order, events: Array.isArray(payload?.events) ? payload.events : [] };
+      })
+    );
+    shipmentCards.value = results
+      .map(({ order, events }) => normalizeCard(order, events))
+      .sort((a, b) => b.id - a.id);
+    if (shipmentCards.value.length > 0) {
+      expandedCards.value = new Set([shipmentCards.value[0].id]);
+    }
+  } catch (err) {
+    shipmentError.value = err instanceof Error ? err.message : "load shipment failed";
+  } finally {
+    shipmentLoading.value = false;
+  }
+}
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+
 
 const loading = ref(true);
 const errorText = ref("");
@@ -22,48 +145,49 @@ const salon = ref({
   membership: { level: "初見", total_spent_twd: 0, next_level: null, remaining_twd: 0 },
 });
 
-const sectionMeta = {
+const sectionMeta = computed(() => ({
   timeline: {
-    title: "交易時間軸",
-    subtitle: "Purchase history",
+    title: t("account.section_timeline"),
+    subtitle: t("account.section_timeline_sub"),
   },
   rooms: {
-    title: "我的諮詢室",
-    subtitle: "Consultation rooms",
+    title: t("account.section_rooms"),
+    subtitle: t("account.section_rooms_sub"),
   },
   orders: {
-    title: "我的訂單",
-    subtitle: "Order history",
+    title: t("account.section_orders"),
+    subtitle: t("account.section_orders_sub"),
   },
   messages: {
-    title: "通知中心",
-    subtitle: "Notifications",
+    title: t("account.section_messages"),
+    subtitle: t("account.section_messages_sub"),
   },
   coupons: {
-    title: "我的折扣券",
-    subtitle: "My coupons",
+    title: t("account.section_coupons"),
+    subtitle: t("account.section_coupons_sub"),
   },
   gacha: {
-    title: "幸運抽獎",
-    subtitle: "Lucky draw",
+    title: t("account.section_gacha"),
+    subtitle: t("account.section_gacha_sub"),
   },
   points: {
-    title: "回饋點數紀錄",
-    subtitle: "Point history",
+    title: t("account.section_points"),
+    subtitle: t("account.section_points_sub"),
   },
-};
+}));
 
 const section = computed(() => String(route.params.section || "timeline"));
-const meta = computed(() => sectionMeta[section.value] || sectionMeta.timeline);
-const navItems = [
-  { key: "timeline", label: "交易時間軸", en: "Purchase history" },
-  { key: "rooms", label: "我的諮詢室", en: "Consultation rooms" },
-  { key: "orders", label: "我的訂單", en: "Order history" },
-  { key: "messages", label: "通知中心", en: "Notifications" },
-  { key: "coupons", label: "我的折扣券", en: "My coupons" },
-  { key: "gacha", label: "幸運抽獎", en: "Lucky draw" },
-  { key: "points", label: "回饋點數紀錄", en: "Point history" },
-];
+const meta = computed(() => sectionMeta.value[section.value] || sectionMeta.value.timeline);
+const navItems = computed(() => [
+  { key: "timeline", label: t("account.section_timeline"), en: t("account.section_timeline_sub") },
+  { key: "rooms", label: t("account.section_rooms"), en: t("account.section_rooms_sub") },
+  { key: "orders", label: t("account.section_orders"), en: t("account.section_orders_sub") },
+  { key: "messages", label: t("account.section_messages"), en: t("account.section_messages_sub") },
+  { key: "coupons", label: t("account.section_coupons"), en: t("account.section_coupons_sub") },
+  { key: "gacha", label: t("account.section_gacha"), en: t("account.section_gacha_sub") },
+  { key: "points", label: t("account.section_points"), en: t("account.section_points_sub") },
+
+]);
 
 const sectionItems = computed(() => {
   if (section.value === "timeline") return salon.value.timeline || [];
@@ -84,6 +208,51 @@ const gachaStatus = ref({ draws_available: 0, pool: null });
 const gachaResults = ref([]);
 const isDrawing = ref(false);
 const showResult = ref(false);
+
+const orderReviews = ref({});  // { [orderId]: reviewData | null }
+const reviewDialog = ref({ open: false, orderId: null, orderName: "" });
+const reviewForm = ref({ rating: 0, quality_rating: 0, delivery_rating: 0, service_rating: 0, comment: "" });
+const reviewSubmitting = ref(false);
+const reviewError = ref("");
+const reviewSuccess = ref(false);
+
+async function loadOrderReview(orderId) {
+  if (orderReviews.value[orderId] !== undefined) return;
+  try {
+    const review = await fetchOrderReview(orderId);
+    orderReviews.value[orderId] = review;
+  } catch {
+    orderReviews.value[orderId] = null;
+  }
+}
+
+function openReviewDialog(orderId, orderName) {
+  reviewDialog.value = { open: true, orderId, orderName };
+  reviewForm.value = { rating: 0, quality_rating: 0, delivery_rating: 0, service_rating: 0, comment: "" };
+  reviewError.value = "";
+  reviewSuccess.value = false;
+}
+
+function closeReviewDialog() {
+  reviewDialog.value = { open: false, orderId: null, orderName: "" };
+}
+
+async function handleReviewSubmit() {
+  const { orderId } = reviewDialog.value;
+  if (!orderId) return;
+  reviewSubmitting.value = true;
+  reviewError.value = "";
+  try {
+    const result = await submitOrderReview(orderId, reviewForm.value);
+    orderReviews.value[orderId] = result;
+    reviewSuccess.value = true;
+    setTimeout(() => closeReviewDialog(), 1500);
+  } catch (err) {
+    reviewError.value = t("account.review_error");
+  } finally {
+    reviewSubmitting.value = false;
+  }
+}
 
 function syncUnreadStorage(unread) {
   if (typeof window === "undefined") {
@@ -109,24 +278,24 @@ function openRoom(roomId) {
 
 function statusLabel(status) {
   const tone = {
-    inquiring: "諮詢中",
-    waiting_quote: "待報價",
-    quoted: "待確認",
-    buyer_accepted: "待匯款",
-    proof_uploaded: "待核款",
-    paid: "待出貨",
-    completed: "已完成",
+    inquiring: t("account.status_inquiring"),
+    waiting_quote: t("account.status_waiting_quote"),
+    quoted: t("account.status_quoted"),
+    buyer_accepted: t("account.status_buyer_accepted"),
+    proof_uploaded: t("account.status_proof_uploaded"),
+    paid: t("account.status_paid"),
+    completed: t("account.status_completed"),
   };
-  return tone[String(status || "")] || String(status || "處理中");
+  return tone[String(status || "")] || String(status || t("account.status_default"));
 }
 
 function rowTitle(item) {
-  if (section.value === "timeline") return item.title || "交易節點";
+  if (section.value === "timeline") return item.title || t("account.row_transaction");
   if (section.value === "rooms") return `Room #${item.id} ・ ${item.product_name || "Consultation"}`;
   if (section.value === "orders") return item.product_name || `Order #${item.id}`;
-  if (section.value === "messages") return item.title || "系統通知";
-  if (section.value === "points") return item.reason || "點數紀錄";
-  return "紀錄";
+  if (section.value === "messages") return item.title || t("account.row_system_notif");
+  if (section.value === "points") return item.reason || t("account.row_record");
+  return t("account.row_record");
 }
 
 function rowDesc(item) {
@@ -145,7 +314,11 @@ function rowAction(item) {
 }
 
 function gotoSection(nextSection) {
-  router.push(`/dashboard/${nextSection}`);
+  if (nextSection === "shipment") {
+    router.push("/dashboard/timeline");
+  } else {
+    router.push(`/dashboard/${nextSection}`);
+  }
 }
 
 async function drawGacha() {
@@ -170,7 +343,7 @@ async function drawGacha() {
       await router.push("/login");
       return;
     }
-    errorText.value = error instanceof Error ? error.message : "抽獎失敗";
+    errorText.value = error instanceof Error ? error.message : t("account.draw_failed");
   } finally {
     isDrawing.value = false;
   }
@@ -190,6 +363,11 @@ async function loadSection() {
       ...salon.value,
       ...data,
     };
+    for (const order of (salon.value.orders || [])) {
+      if (String(order.status) === "completed") {
+        loadOrderReview(order.id);
+      }
+    }
 
     if (shouldClearUnreadOnRoute(route.fullPath)) {
       const rows = Array.isArray(salon.value.notifications?.items) ? salon.value.notifications.items : [];
@@ -215,7 +393,7 @@ async function loadSection() {
       return;
     }
     salonFailed = true;
-    errorText.value = error instanceof Error ? error.message : "載入失敗";
+    errorText.value = error instanceof Error ? error.message : t("account.load_failed");
     if (shouldClearUnreadOnRoute(route.fullPath)) {
       syncUnreadStorage(0);
     }
@@ -245,13 +423,14 @@ async function loadSection() {
   loading.value = false;
 }
 
-onMounted(loadSection);
+onMounted(() => { loadSection(); if (section.value === 'timeline') loadShipments(); });
 
 watch(
   () => route.params.section,
   () => {
     showResult.value = false;
     void loadSection();
+    if (section.value === 'timeline') loadShipments();
   }
 );
 </script>
@@ -259,7 +438,7 @@ watch(
 <template>
   <div class="account-section container">
     <header class="section-head">
-      <button class="back-btn" type="button" @click="router.push('/dashboard')">&lt; My Page</button>
+      <button class="back-btn" type="button" @click="router.push('/dashboard')">{{ $t('account.back_my_page') }}</button>
       <h1>{{ meta.title }}</h1>
       <p>{{ meta.subtitle }}</p>
     </header>
@@ -267,10 +446,10 @@ watch(
     <div v-if="!loading && !errorText" class="layout">
       <aside class="aside">
         <section class="point-box">
-          <p class="point-label">可用點數 / My points</p>
+          <p class="point-label">{{ $t('account.points_label') }}</p>
           <p class="point-value">{{ salon.points?.balance || 0 }}<span>pt</span></p>
-          <p class="point-sub">會員等級：{{ membershipSnapshot.level }}</p>
-          <p class="point-spent">累計消費：NT$ {{ Number(membershipSnapshot.totalSpentTwd || 0).toLocaleString() }}</p>
+          <p class="point-sub">{{ $t('account.level_label') }}{{ membershipSnapshot.level }}</p>
+          <p class="point-spent">{{ $t('account.spent_label') }}NT$ {{ Number(membershipSnapshot.totalSpentTwd || 0).toLocaleString() }}</p>
           <p class="point-upgrade">{{ membershipSnapshot.upgradeHint }}</p>
           <div class="tier-track" aria-label="membership tier track">
             <div class="tier-track-bar">
@@ -317,7 +496,7 @@ watch(
       </aside>
 
       <section class="main">
-        <p v-if="sectionItems.length === 0 && section !== 'coupons' && section !== 'gacha'" class="state">目前尚無資料，可先透過下單或諮詢建立紀錄。</p>
+        <p v-if="sectionItems.length === 0 && section !== 'coupons' && section !== 'gacha' && section !== 'timeline'" class="state">{{ $t('account.no_data') }}</p>
 
         <!-- Orders: simplified card layout with image + order info -->
         <section v-else-if="section === 'orders'" class="order-list">
@@ -332,23 +511,81 @@ watch(
               <p class="order-name">{{ item.product_name || `Order #${item.id}` }}</p>
               <p class="order-meta">{{ statusLabel(item.status) }} ・ {{ formatCurrency(item.final_amount_twd || item.amount_twd) }}</p>
               <p v-if="item.created_at" class="order-date">{{ formatDate(item.created_at) }}</p>
+              <button
+                v-if="['paid', 'completed', 'shipped'].includes(String(item.status || ''))"
+                type="button"
+                class="order-shipment-link"
+                @click="router.push('/dashboard/timeline')"
+              >{{ $t('account.view_shipment') }} &rarr;</button>
+              <!-- Review button for completed orders -->
+              <button
+                v-if="String(item.status) === 'completed' && !orderReviews[item.id]"
+                type="button"
+                class="order-review-btn"
+                @click="openReviewDialog(item.id, item.product_name || `Order #${item.id}`)"
+              >{{ $t('account.review_btn') }} ✍️</button>
+              <span v-else-if="String(item.status) === 'completed' && orderReviews[item.id]" class="order-reviewed-badge">
+                ★ {{ orderReviews[item.id].rating }}/5 — {{ $t('account.review_submitted') }}
+              </span>
             </div>
           </article>
         </section>
 
         <!-- Timeline: transaction milestones with timeline visual -->
-        <section v-else-if="section === 'timeline'" class="timeline-list">
-          <article v-for="(item, idx) in sectionItems" :key="item.id || idx" class="timeline-node">
-            <div class="timeline-dot-col">
-              <span class="timeline-dot"></span>
-              <span v-if="idx < sectionItems.length - 1" class="timeline-line"></span>
-            </div>
-            <div class="timeline-content">
-              <p class="title">{{ rowTitle(item) }}</p>
-              <p class="desc">{{ item.detail || "" }}</p>
-              <p class="timestamp">{{ formatDate(item.created_at) }}</p>
-            </div>
-          </article>
+        <!-- Timeline: shipment tracking cards (integrated from WarehouseView) -->
+        <section v-else-if="section === 'timeline'" class="shipment-section">
+          <div v-if="shipmentLoading" class="state">{{ $t('account.loading') }}</div>
+          <div v-else-if="shipmentError" class="state error">{{ shipmentError }}</div>
+          <div v-else-if="!shipmentCards.length" class="state">{{ $t('shipment.no_orders') }}</div>
+          <div v-else class="cards-grid">
+            <article v-for="card in shipmentCards" :key="card.id" class="shipment-card">
+              <header class="card-head" role="button" tabindex="0" @click="toggleCard(card.id)" @keydown.enter="toggleCard(card.id)">
+                <div class="head-title">
+                  <p class="product-label">{{ $t('shipment.product') }}</p>
+                  <h2>{{ card.productName }}</h2>
+                </div>
+                <div class="head-meta">
+                  <p>{{ $t('shipment.order_id') }} #{{ card.id }}</p>
+                  <span class="status-badge">{{ statusLabelShipment(card.latestStatus || card.orderStatus) }}</span>
+                </div>
+                <button class="toggle-btn" type="button" :aria-expanded="expandedCards.has(card.id)">
+                  <svg class="toggle-icon" :class="{ rotated: expandedCards.has(card.id) }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+              </header>
+              <div v-if="!expandedCards.has(card.id) && card.steps.some(s => s.current)" class="latest-preview">
+                <template v-for="step in card.steps" :key="step.stage">
+                  <div v-if="step.current" class="preview-step">
+                    <span class="preview-dot"></span>
+                    <div class="preview-body">
+                      <p class="preview-title">{{ statusLabelShipment(step.stage) }}</p>
+                      <p v-if="step.event?.description" class="preview-desc">{{ step.event.description }}</p>
+                      <p v-if="step.event?.event_time" class="preview-time">{{ formatEventTime(step.event.event_time) }}</p>
+                    </div>
+                  </div>
+                </template>
+              </div>
+              <div v-if="expandedCards.has(card.id)">
+                <p v-if="!card.events.length" class="no-events">{{ $t('shipment.no_events') }}</p>
+                <ol v-else class="shipment-timeline-list">
+                  <li
+                    v-for="step in card.steps"
+                    :key="`${card.id}-${step.stage}`"
+                    class="shipment-timeline-step"
+                    :class="{ completed: step.completed, current: step.current }"
+                  >
+                    <span class="step-dot"></span>
+                    <div class="step-body">
+                      <p class="step-title">{{ statusLabelShipment(step.stage) }}</p>
+                      <p v-if="step.event?.title" class="step-detail">{{ step.event.title }}</p>
+                      <p v-if="step.event?.description" class="step-sub">{{ step.event.description }}</p>
+                      <p v-if="step.event?.location" class="step-meta">{{ step.event.location }}</p>
+                      <p v-if="step.event?.event_time" class="step-time">{{ formatEventTime(step.event.event_time) }}</p>
+                    </div>
+                  </li>
+                </ol>
+              </div>
+            </article>
+          </div>
         </section>
 
         <!-- Messages / Notifications: system notifications only -->
@@ -360,7 +597,7 @@ watch(
               </svg>
             </div>
             <div>
-              <p class="title">{{ item.title || "系統通知" }}</p>
+              <p class="title">{{ item.title || $t('account.row_system_notif') }}</p>
               <p class="desc">{{ item.detail || "" }}</p>
               <p class="timestamp">{{ formatDate(item.created_at) }}</p>
             </div>
@@ -371,12 +608,12 @@ watch(
         <section v-else-if="section === 'points'" class="points-list">
           <article v-for="item in sectionItems" :key="item.id" class="points-row">
             <div>
-              <p class="title">{{ item.reason || "點數紀錄" }}</p>
+              <p class="title">{{ item.reason || $t('account.row_record') }}</p>
               <p class="desc">
-                {{ item.delta_points > 0 ? "+" : "" }}{{ item.delta_points }} 點 ・ {{ formatDate(item.recorded_at) }}
+                {{ item.delta_points > 0 ? "+" : "" }}{{ item.delta_points }} {{ $t('account.points_unit') }} ・ {{ formatDate(item.recorded_at) }}
               </p>
               <p v-if="item.delta_points > 0 && item.expires_at" class="expiry-hint">
-                有效期限：{{ formatDate(item.expires_at) }}
+                {{ $t('account.expiry_label') }}{{ formatDate(item.expires_at) }}
               </p>
             </div>
           </article>
@@ -384,7 +621,7 @@ watch(
 
         <!-- Coupons: user's discount vouchers -->
         <section v-else-if="section === 'coupons'" class="coupon-list">
-          <p v-if="coupons.length === 0" class="state">目前沒有折扣券，可透過抽獎獲得。</p>
+          <p v-if="coupons.length === 0" class="state">{{ $t('account.no_coupons') }}</p>
           <article v-for="item in coupons" :key="item.id" class="coupon-card" :class="{ used: item.is_used, expired: item.is_expired }">
             <div class="coupon-value">
               <span v-if="item.coupon.type === 'fixed'">-NT${{ item.coupon.value }}</span>
@@ -393,11 +630,11 @@ watch(
             <div class="coupon-info">
               <p class="coupon-desc">{{ item.coupon.description }}</p>
               <p class="coupon-condition" v-if="item.coupon.min_order_twd > 0">滿 NT${{ Number(item.coupon.min_order_twd).toLocaleString() }} 可用</p>
-              <p class="coupon-condition" v-else>無門檻</p>
+              <p class="coupon-condition" v-else>{{ $t('account.coupon_no_min') }}</p>
               <p class="coupon-expiry">
-                <template v-if="item.is_used">已使用</template>
-                <template v-else-if="item.is_expired">已過期</template>
-                <template v-else>有效期限：{{ formatDate(item.expires_at) }}</template>
+                <template v-if="item.is_used">{{ $t('account.coupon_used') }}</template>
+                <template v-else-if="item.is_expired">{{ $t('account.coupon_expired') }}</template>
+                <template v-else>{{ $t('account.expiry_label') }}{{ formatDate(item.expires_at) }}</template>
               </p>
             </div>
           </article>
@@ -409,7 +646,7 @@ watch(
             <div class="gacha-counter">
               <span class="gacha-counter-label">AVAILABLE DRAWS</span>
               <span class="gacha-counter-value">{{ gachaStatus.draws_available }}</span>
-              <span class="gacha-counter-sub">每購買一件商品可獲得一次抽獎機會</span>
+              <span class="gacha-counter-sub">{{ $t('account.gacha_sub') }}</span>
             </div>
 
             <div class="gacha-pool" v-if="gachaStatus.pool">
@@ -438,7 +675,7 @@ watch(
                 @click="drawGacha"
                 :class="{ 'is-drawing': isDrawing }"
               >
-                <span class="btn-text">{{ isDrawing ? "DRAWING..." : gachaStatus.draws_available > 0 ? "開始抽獎" : "沒有抽獎次數" }}</span>
+                <span class="btn-text">{{ isDrawing ? "DRAWING..." : gachaStatus.draws_available > 0 ? $t('account.gacha_draw') : $t('account.gacha_no_draws') }}</span>
                 <span class="btn-glare"></span>
               </button>
             </div>
@@ -451,18 +688,18 @@ watch(
               <!-- Text-based result summary (always visible, no animation dependency) -->
               <div class="result-summary-text">
                 <template v-for="(result, idx) in gachaResults" :key="'summary-' + idx">
-                  <p v-if="result.is_redraw" class="result-redraw-line">🔄 再抽一次！</p>
+                  <p v-if="result.is_redraw" class="result-redraw-line">{{ $t('account.gacha_redraw') }}</p>
                 </template>
                 <template v-for="(result, idx) in gachaResults" :key="'prize-' + idx">
                   <template v-if="!result.is_redraw">
-                    <p class="result-won-title">🎉 恭喜獲得</p>
+                    <p class="result-won-title">{{ $t('account.gacha_won') }}</p>
                     <p class="result-won-prize">{{ result.label }}</p>
                     <p v-if="result.coupon" class="result-won-desc">{{ result.coupon.coupon.description }}</p>
                   </template>
                 </template>
               </div>
 
-              <div v-for="(result, idx) in gachaResults" :key="idx" class="premium-card result-card animated-flip" :data-tier="result.label" :class="{ redraw: result.is_redraw }">
+              <div class="premium-card result-card animated-flip" :data-tier="gachaResults[0]?.label" :class="{ redraw: gachaResults[0]?.is_redraw }">
                 <div class="premium-card-inner">
                   <div class="premium-card-front">
                     <div class="card-pattern"></div>
@@ -474,25 +711,25 @@ watch(
                     <div class="card-border"></div>
                     <div class="result-content">
                       <p class="result-headline">
-                        <span class="headline-icon" v-if="result.is_redraw">
+                        <span class="headline-icon" v-if="gachaResults[0]?.is_redraw">
                           <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.87-11.1l5.5 5.5"/></svg>
                         </span>
                         <span class="headline-icon" v-else>
                           <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
                         </span>
-                        {{ result.is_redraw ? "再抽一次！" : "恭喜獲得" }}
+                        {{ gachaResults[0]?.is_redraw ? $t('account.gacha_redraw') : $t('account.gacha_won') }}
                       </p>
-                      <p class="result-prize-text">{{ result.label }}</p>
-                      <p v-if="result.coupon" class="result-detail-text">{{ result.coupon.coupon.description }}</p>
+                      <p class="result-prize-text">{{ gachaResults[0]?.label }}</p>
+                      <p v-if="gachaResults[0]?.coupon" class="result-detail-text">{{ gachaResults[0]?.coupon?.coupon?.description }}</p>
                     </div>
                   </div>
                 </div>
               </div>
               <button class="return-btn premium-btn" type="button" @click="closeResultOverlay" v-if="gachaStatus.draws_available > 0">
-                <span class="btn-text">繼續抽獎</span>
+                <span class="btn-text">{{ $t('account.gacha_continue') }}</span>
               </button>
-              <button class="result-close" type="button" @click="closeResultOverlay">關閉結果</button>
-              <p class="result-hint">點擊背景關閉</p>
+              <button class="result-close" type="button" @click="closeResultOverlay">{{ $t('account.gacha_close') }}</button>
+              <p class="result-hint">{{ $t('account.gacha_click_bg') }}</p>
             </div>
           </div>
         </section>
@@ -518,28 +755,86 @@ watch(
       </section>
     </div>
 
-    <p v-if="loading" class="state">載入中...</p>
+    <p v-if="loading" class="state">{{ $t('account.loading') }}</p>
     <p v-else-if="errorText" class="state error">{{ errorText }}</p>
+    <!-- Review dialog -->
+    <div v-if="reviewDialog.open" class="review-overlay" @click.self="closeReviewDialog">
+      <div class="review-modal">
+        <header class="review-modal-head">
+          <h2>{{ $t('account.review_title') }}</h2>
+          <p class="review-modal-product">{{ reviewDialog.orderName }}</p>
+          <button type="button" class="review-close-btn" @click="closeReviewDialog">&times;</button>
+        </header>
+
+        <div v-if="reviewSuccess" class="review-success-msg">
+          <p>{{ $t('account.review_success') }}</p>
+        </div>
+
+        <form v-else class="review-form" @submit.prevent="handleReviewSubmit">
+          <div class="rating-group" v-for="cat in [
+            { key: 'rating', label: $t('account.review_overall') },
+            { key: 'quality_rating', label: $t('account.review_quality') },
+            { key: 'delivery_rating', label: $t('account.review_delivery') },
+            { key: 'service_rating', label: $t('account.review_service') }
+          ]" :key="cat.key">
+            <label class="rating-label">{{ cat.label }}</label>
+            <div class="star-row">
+              <button
+                v-for="star in 5"
+                :key="star"
+                type="button"
+                class="star-btn"
+                :class="{ filled: reviewForm[cat.key] >= star }"
+                @click="reviewForm[cat.key] = star"
+                :aria-label="`${star} star`"
+              >★</button>
+            </div>
+          </div>
+
+          <div class="comment-group">
+            <label class="rating-label">{{ $t('account.review_comment') }}</label>
+            <textarea
+              v-model="reviewForm.comment"
+              class="review-textarea"
+              :placeholder="$t('account.review_comment_placeholder')"
+              rows="4"
+            ></textarea>
+          </div>
+
+          <p v-if="reviewError" class="review-error-msg">{{ reviewError }}</p>
+
+          <button
+            type="submit"
+            class="review-submit-btn"
+            :disabled="reviewSubmitting || !reviewForm.rating || !reviewForm.quality_rating || !reviewForm.delivery_rating || !reviewForm.service_rating || !reviewForm.comment.trim()"
+          >{{ reviewSubmitting ? $t('account.review_submitting') : $t('account.review_submit') }}</button>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .account-section {
   color: #1b2740;
-  max-width: 980px;
+  max-width: 1060px;
+  margin: 0 auto;
   padding-bottom: 6rem;
   padding-top: 2.5rem;
 }
 
 .layout {
-  column-gap: 1.8rem;
+  column-gap: 2rem;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
+  align-items: start;
 }
 
 .aside {
   display: grid;
   gap: 1rem;
+  position: sticky;
+  top: 1.5rem;
 }
 
 .point-box {
@@ -691,6 +986,7 @@ watch(
 
 .main {
   min-width: 0;
+  min-height: 300px;
 }
 
 .section-head {
@@ -809,6 +1105,23 @@ watch(
   color: #7a8a9e;
   font-size: 0.8rem;
   margin: 0.2rem 0 0;
+}
+
+.order-shipment-link {
+  display: inline-block;
+  margin-top: 0.5rem;
+  background: transparent;
+  border: 1px solid rgba(145, 116, 78, 0.45);
+  padding: 0.22rem 0.65rem;
+  font-family: var(--font-sans);
+  font-size: 0.78rem;
+  color: var(--accent-700, #91744e);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.order-shipment-link:hover {
+  background: rgba(238, 221, 196, 0.35);
 }
 
 /* Timeline nodes */
@@ -1086,14 +1399,21 @@ watch(
 }
 
 .result-card .premium-card-inner {
-  transform: rotateY(0deg);
-  animation: flipIn 1.2s 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  transform: none;
+  animation: resultCardReveal 0.6s 0.4s ease-out both;
 }
 
-@keyframes flipIn {
-  0% { transform: rotateY(0deg) scale(0.8); opacity: 0; }
-  50% { transform: rotateY(90deg) scale(1.1); opacity: 1; }
-  100% { transform: rotateY(180deg) scale(1); opacity: 1; }
+.result-card .premium-card-front {
+  display: none;
+}
+
+.result-card .premium-card-back {
+  transform: none;
+}
+
+@keyframes resultCardReveal {
+  0% { transform: scale(0.7); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 .premium-card-front, .premium-card-back {
@@ -1245,10 +1565,12 @@ watch(
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   z-index: 100;
   animation: fadeIn 0.3s forwards;
+  overflow-y: auto;
+  padding: 2rem 1rem;
 }
 
 .result-backdrop {
@@ -1265,37 +1587,57 @@ watch(
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2rem;
+  gap: 1.5rem;
   width: 100%;
+  max-width: 600px;
+  margin: auto;
   pointer-events: auto;
+  padding: 1rem 0;
 }
 .result-summary-text {
   text-align: center;
   color: #f3f4f6;
   z-index: 12;
-  margin-bottom: 0.5rem;
+  padding: 1.5rem 2rem;
+  animation: resultTextReveal 0.5s ease-out both;
 }
 .result-won-title {
-  font-size: 1.1rem;
+  font-size: 1.3rem;
   color: #e6dfd5;
   margin: 0;
+  letter-spacing: 0.15em;
 }
 .result-won-prize {
-  font-size: 3rem;
-  font-weight: 700;
-  color: #927a57;
-  margin: 0.5rem 0;
-  text-shadow: 0 2px 10px rgba(146, 122, 87, 0.5);
+  font-size: 3.5rem;
+  font-weight: 800;
+  color: #d4af37;
+  margin: 0.6rem 0;
+  text-shadow: 0 0 20px rgba(212, 175, 55, 0.6), 0 2px 10px rgba(146, 122, 87, 0.5);
+  animation: prizeGlow 2s ease-in-out infinite;
 }
 .result-won-desc {
-  font-size: 1rem;
+  font-size: 1.1rem;
   color: #d4d9df;
-  margin: 0;
+  margin: 0.3rem 0 0;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.5rem 1.2rem;
+  border-radius: 20px;
+  display: inline-block;
 }
 .result-redraw-line {
-  font-size: 1rem;
+  font-size: 1.1rem;
   color: #a3aab5;
   margin: 0 0 0.5rem;
+}
+
+@keyframes resultTextReveal {
+  0% { transform: translateY(-20px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes prizeGlow {
+  0%, 100% { text-shadow: 0 0 20px rgba(212, 175, 55, 0.6), 0 2px 10px rgba(146, 122, 87, 0.5); }
+  50% { text-shadow: 0 0 30px rgba(212, 175, 55, 0.9), 0 2px 15px rgba(146, 122, 87, 0.7); }
 }
 
 
@@ -1437,13 +1779,13 @@ watch(
   --border-style: dashed;
 }
 .result-card[data-tier="8折"] .premium-card-inner {
-  animation: flipInLegendary 1.5s 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  animation: resultCardRevealLegendary 0.8s 0.4s ease-out both;
 }
 
-@keyframes flipInLegendary {
-  0% { transform: rotateY(0deg) scale(0.8); opacity: 0; }
-  50% { transform: rotateY(180deg) scale(1.15); opacity: 1; filter: brightness(1.2) drop-shadow(0 0 20px rgba(255,157,0,0.8)); }
-  100% { transform: rotateY(180deg) scale(1); opacity: 1; filter: brightness(1); }
+@keyframes resultCardRevealLegendary {
+  0% { transform: scale(0.6); opacity: 0; filter: brightness(1.5) drop-shadow(0 0 30px rgba(255,157,0,0.8)); }
+  60% { transform: scale(1.08); opacity: 1; filter: brightness(1.2) drop-shadow(0 0 20px rgba(255,157,0,0.6)); }
+  100% { transform: scale(1); opacity: 1; filter: brightness(1); }
 }
 
 .result-card[data-tier="8折"] .card-particles {
@@ -1457,6 +1799,218 @@ watch(
   0% { opacity: 0.5; transform: scale(0.9); }
   50% { opacity: 1; transform: scale(1.1); }
   100% { opacity: 0.5; transform: scale(0.9); }
+}
+
+/* ─── Shipment cards (integrated from WarehouseView) ─── */
+.shipment-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.cards-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.shipment-card {
+  border: 1px solid var(--paper-300);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.74), rgba(255,255,255,0.5)),
+    radial-gradient(circle at top right, rgba(231,210,175,0.35), transparent 45%),
+    var(--paper-50);
+  padding: 1.2rem;
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0;
+  cursor: pointer;
+  padding-bottom: 0.9rem;
+  user-select: none;
+}
+
+.product-label {
+  margin: 0;
+  font-size: 0.72rem;
+  font-family: var(--font-sans);
+  letter-spacing: 0.1em;
+  color: var(--ink-500);
+}
+
+.head-title h2 {
+  margin: 0.35rem 0 0;
+  font-family: var(--font-serif);
+  color: var(--ink-900);
+  font-size: 1.25rem;
+}
+
+.head-meta {
+  text-align: right;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  color: var(--ink-600);
+}
+
+.head-meta p {
+  margin: 0;
+}
+
+.status-badge {
+  display: inline-flex;
+  margin-top: 0.45rem;
+  border: 1px solid rgba(145,116,78,0.4);
+  padding: 0.2rem 0.55rem;
+  color: var(--ink-800);
+  background: rgba(238,221,196,0.38);
+}
+
+.toggle-btn {
+  background: transparent;
+  border: 0;
+  color: var(--ink-500);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0.2rem;
+  margin-top: 0.2rem;
+}
+
+.toggle-icon {
+  display: block;
+  height: 18px;
+  width: 18px;
+  transition: transform 0.22s ease;
+}
+
+.toggle-icon.rotated {
+  transform: rotate(180deg);
+}
+
+.latest-preview {
+  border-top: 1px solid var(--paper-300);
+  padding-top: 0.7rem;
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+
+.preview-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #b29262;
+  flex-shrink: 0;
+  margin-top: 0.32rem;
+  box-shadow: 0 0 0 3px rgba(178,146,98,0.18);
+}
+
+.preview-body {
+  min-width: 0;
+}
+
+.preview-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--ink-800);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.preview-desc {
+  margin: 0.15rem 0 0;
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  color: var(--ink-600);
+}
+
+.preview-time {
+  margin: 0.1rem 0 0;
+  font-family: var(--font-sans);
+  font-size: 0.74rem;
+  color: var(--ink-500);
+}
+
+.no-events {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--ink-500);
+}
+
+.shipment-timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.shipment-timeline-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 0.7rem;
+  padding-bottom: 0.9rem;
+}
+
+.shipment-timeline-step::after {
+  content: "";
+  position: absolute;
+  top: 18px;
+  left: 8px;
+  width: 2px;
+  height: calc(100% - 15px);
+  background: var(--paper-300);
+}
+
+.shipment-timeline-step:last-child::after {
+  display: none;
+}
+
+.step-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  margin-top: 2px;
+  border: 1px solid var(--paper-300);
+  background: var(--paper-50);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.shipment-timeline-step.completed .step-dot {
+  background: #b29262;
+  border-color: #b29262;
+}
+
+.shipment-timeline-step.current .step-dot {
+  box-shadow: 0 0 0 4px rgba(178,146,98,0.2);
+}
+
+.step-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--ink-700);
+  font-size: 0.92rem;
+}
+
+.shipment-timeline-step.completed .step-title,
+.shipment-timeline-step.current .step-title {
+  color: var(--ink-900);
+  font-weight: 600;
+}
+
+.step-detail,
+.step-sub,
+.step-meta,
+.step-time {
+  margin: 0.18rem 0 0;
+  font-family: var(--font-sans);
+  font-size: 0.8rem;
+  color: var(--ink-600);
+}
+
+.step-time {
+  color: var(--ink-500);
+  font-size: 0.75rem;
 }
 
 @media (max-width: 900px) {
@@ -1490,5 +2044,155 @@ watch(
   .gacha-counter-value {
     font-size: 2.8rem;
   }
+}
+
+/* ─── Review UI ─── */
+.order-review-btn {
+  background: transparent;
+  border: 1px solid var(--accent-500, #b29262);
+  color: var(--accent-500, #b29262);
+  padding: 0.35rem 0.8rem;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+  margin-top: 0.4rem;
+}
+.order-review-btn:hover {
+  background: var(--accent-500, #b29262);
+  color: #fff;
+}
+.order-reviewed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.4rem;
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  color: var(--accent-500, #b29262);
+}
+.review-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.review-modal {
+  background: #fff;
+  border: 1px solid var(--paper-300, #d4d9df);
+  max-width: 520px;
+  width: 100%;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 2rem;
+  position: relative;
+}
+.review-modal-head {
+  margin-bottom: 1.5rem;
+}
+.review-modal-head h2 {
+  font-family: var(--font-serif, Georgia, serif);
+  font-size: 1.4rem;
+  font-weight: 400;
+  color: var(--ink-900, #182a47);
+  margin: 0;
+}
+.review-modal-product {
+  font-family: var(--font-sans);
+  font-size: 0.88rem;
+  color: var(--ink-600, #4b5f7e);
+  margin: 0.3rem 0 0;
+}
+.review-close-btn {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: transparent;
+  border: 0;
+  font-size: 1.5rem;
+  color: var(--ink-500, #5a6f8a);
+  cursor: pointer;
+  line-height: 1;
+}
+.rating-group {
+  margin-bottom: 1rem;
+}
+.rating-label {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 0.85rem;
+  color: var(--ink-700, #324867);
+  margin-bottom: 0.35rem;
+}
+.star-row {
+  display: flex;
+  gap: 0.25rem;
+}
+.star-btn {
+  background: transparent;
+  border: 0;
+  font-size: 1.5rem;
+  color: var(--paper-300, #d4d9df);
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s, transform 0.15s;
+}
+.star-btn:hover {
+  transform: scale(1.15);
+}
+.star-btn.filled {
+  color: #e8b84b;
+}
+.comment-group {
+  margin-bottom: 1.2rem;
+}
+.review-textarea {
+  width: 100%;
+  border: 1px solid var(--paper-300, #d4d9df);
+  padding: 0.7rem;
+  font-family: var(--font-sans);
+  font-size: 0.9rem;
+  color: var(--ink-800, #1b2740);
+  resize: vertical;
+  min-height: 80px;
+  box-sizing: border-box;
+}
+.review-textarea:focus {
+  outline: none;
+  border-color: var(--accent-500, #b29262);
+}
+.review-submit-btn {
+  width: 100%;
+  padding: 0.75rem;
+  background: var(--accent-500, #b29262);
+  color: #fff;
+  border: 0;
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+.review-submit-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.review-submit-btn:not(:disabled):hover {
+  opacity: 0.85;
+}
+.review-error-msg {
+  color: #c0392b;
+  font-size: 0.85rem;
+  margin: 0 0 0.8rem;
+}
+.review-success-msg {
+  text-align: center;
+  padding: 2rem 0;
+  color: var(--accent-500, #b29262);
+  font-family: var(--font-sans);
+  font-size: 1.1rem;
 }
 </style>

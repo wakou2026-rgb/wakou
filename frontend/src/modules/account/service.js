@@ -101,17 +101,26 @@ export async function markNotificationsRead(lastEventId) {
   return response.json();
 }
 
-export async function createReview(payload) {
-  const response = await fetch("/api/v1/reviews", {
+export async function submitOrderReview(orderId, payload) {
+  const response = await fetch(`/api/v1/orders/${orderId}/reviews`, {
     method: "POST",
-    headers: {
-      ...authHeaders(),
-      "Content-Type": "application/json"
-    },
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
   if (!response.ok) {
-    throw new Error(`create review failed (${response.status})`);
+    throw buildHttpError("submit review", response.status);
+  }
+  return response.json();
+}
+
+export async function fetchOrderReview(orderId) {
+  const response = await fetch(`/api/v1/orders/${orderId}/reviews`, {
+    method: "GET",
+    headers: authHeaders()
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw buildHttpError("load review", response.status);
   }
   return response.json();
 }

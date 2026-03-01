@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "../../modules/auth/store";
 import { fetchMyCommRooms, fetchMyOrders, fetchPrivateSalon, fetchUserGrowth, updateMyDisplayName } from "../../modules/account/service";
@@ -7,6 +8,7 @@ import { deriveMembershipSnapshot } from "../../modules/account/membership";
 
 const router = useRouter();
 const authStore = useAuthStore();
+const { t } = useI18n();
 
 const loading = ref(true);
 const isError = ref(false);
@@ -58,16 +60,16 @@ function formatDate(value) {
 }
 
 function statusTone(status) {
-  const tone = {
-    inquiring: "待回覆",
-    waiting_quote: "待回覆",
-    quoted: "待確認",
-    buyer_accepted: "待匯款",
-    proof_uploaded: "待核款",
-    paid: "待出貨",
-    completed: "已完成",
+  const map = {
+    inquiring: t("dashboard.status_pending"),
+    waiting_quote: t("dashboard.status_pending"),
+    quoted: t("dashboard.status_quoted"),
+    buyer_accepted: t("dashboard.status_buyer_accepted"),
+    proof_uploaded: t("dashboard.status_proof_uploaded"),
+    paid: t("dashboard.status_paid"),
+    completed: t("dashboard.status_completed"),
   };
-  return tone[String(status || "")] || String(status || "-");
+  return map[String(status || "")] || String(status || "-");
 }
 
 function openRoom(roomId) {
@@ -98,7 +100,7 @@ async function loadSalon() {
       window.localStorage.setItem("wakou_unread_count", String(result.notifications?.unread || 0));
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "載入私人藏室失敗";
+    const message = error instanceof Error ? error.message : t("dashboard.load_failed");
     if (isUnauthorizedError(error)) {
       authStore.logout();
       await router.push("/login");
@@ -130,7 +132,7 @@ async function saveDisplayName() {
   const next = profileForm.displayName.trim();
   if (!next) {
     isError.value = true;
-    statusText.value = "顯示名稱不可為空";
+    statusText.value = t("dashboard.display_name_empty");
     return;
   }
   isError.value = false;
@@ -140,10 +142,10 @@ async function saveDisplayName() {
     const name = updated?.display_name || next;
     authStore.setDisplayName(name);
     profileForm.displayName = name;
-    statusText.value = "顯示名稱已更新";
+    statusText.value = t("dashboard.updated");
   } catch (error) {
     isError.value = true;
-    statusText.value = error instanceof Error ? error.message : "更新失敗";
+    statusText.value = error instanceof Error ? error.message : t("dashboard.update_failed");
   }
 }
 
@@ -153,15 +155,15 @@ onMounted(loadSalon);
 <template>
   <div class="salon container">
     <header class="head">
-      <p class="head-ja">{{ authStore.displayName || "會員" }} 的會員頁</p>
+      <p class="head-ja">{{ authStore.displayName || $t('dashboard.member_default') }}{{ $t('dashboard.my_page') }}</p>
       <p class="head-en">My Page</p>
     </header>
 
     <section class="point-card" aria-label="my points">
-      <p class="point-label">可用點數 / My points</p>
+      <p class="point-label">{{ $t('dashboard.points_label') }}</p>
       <p class="point-value">{{ salon.points?.balance || 0 }}<span>pt</span></p>
-      <p class="point-meta">會員等級 {{ membershipSnapshot.level }}</p>
-      <p class="point-spent">累計消費 NT$ {{ Number(membershipSnapshot.totalSpentTwd || 0).toLocaleString() }}</p>
+      <p class="point-meta">{{ $t('dashboard.level_label') }}{{ membershipSnapshot.level }}</p>
+      <p class="point-spent">{{ $t('dashboard.spent_label') }}{{ Number(membershipSnapshot.totalSpentTwd || 0).toLocaleString() }}</p>
       <p class="point-upgrade">{{ membershipSnapshot.upgradeHint }}</p>
       <div class="tier-track" aria-label="membership tier track">
         <div class="tier-track-bar">
@@ -195,8 +197,8 @@ onMounted(loadSalon);
     <section class="member-edit" aria-label="member info">
       <p class="member-mail">{{ authStore.email }}</p>
       <div class="member-form">
-        <input v-model="profileForm.displayName" class="member-field" type="text" maxlength="24" placeholder="顯示名稱" />
-        <button class="member-btn" type="button" @click="saveDisplayName">更新</button>
+        <input v-model="profileForm.displayName" class="member-field" type="text" maxlength="24" :placeholder="$t('dashboard.display_name_placeholder')" />
+        <button class="member-btn" type="button" @click="saveDisplayName">{{ $t('dashboard.update_btn') }}</button>
       </div>
       <p v-if="statusText" class="status" :class="isError ? 'error' : 'ok'">{{ statusText }}</p>
     </section>
@@ -204,69 +206,78 @@ onMounted(loadSalon);
     <section class="board" aria-label="dashboard rows">
       <article class="board-row" role="button" tabindex="0" @click="navigateBoard('timeline')" @keydown.enter="navigateBoard('timeline')">
         <div class="row-head">
-          <p class="row-ja">交易時間軸</p>
+          <p class="row-ja">{{ $t('dashboard.timeline_title') }}</p>
           <p class="row-en">Purchase history</p>
         </div>
-        <p class="row-desc">{{ (salon.timeline || []).length === 0 ? "尚無交易節點。" : `共 ${(salon.timeline || []).length} 筆交易節點可查閱。` }}</p>
-        <button class="row-link row-tail" type="button" @click.stop="navigateBoard('timeline')"><span class="row-count">{{ orderCount }} 筆</span><span class="row-arrow">&gt;</span></button>
+        <p class="row-desc">{{ (salon.timeline || []).length === 0 ? $t('dashboard.timeline_empty') : $t('dashboard.timeline_count', { n: (salon.timeline || []).length }) }}</p>
+        <button class="row-link row-tail" type="button" @click.stop="navigateBoard('timeline')"><span class="row-count">{{ orderCount }} {{ $t('dashboard.unit_count') }}</span><span class="row-arrow">&gt;</span></button>
       </article>
 
       <article class="board-row" role="button" tabindex="0" @click="navigateBoard('rooms')" @keydown.enter="navigateBoard('rooms')">
         <div class="row-head">
-          <p class="row-ja">我的諮詢室</p>
+          <p class="row-ja">{{ $t('dashboard.rooms_title') }}</p>
           <p class="row-en">Consultation rooms</p>
         </div>
-        <p class="row-desc">{{ roomCount === 0 ? "尚未建立諮詢室。" : `目前有 ${roomCount} 間諮詢室。` }}</p>
-        <button class="row-link row-tail" type="button" @click.stop="navigateBoard('rooms')"><span class="row-count">{{ roomCount }} 間</span><span class="row-arrow">&gt;</span></button>
+        <p class="row-desc">{{ roomCount === 0 ? $t('dashboard.rooms_empty') : $t('dashboard.rooms_count', { n: roomCount }) }}</p>
+        <button class="row-link row-tail" type="button" @click.stop="navigateBoard('rooms')"><span class="row-count">{{ roomCount }} {{ $t('dashboard.unit_room') }}</span><span class="row-arrow">&gt;</span></button>
       </article>
 
       <article class="board-row" role="button" tabindex="0" @click="navigateBoard('orders')" @keydown.enter="navigateBoard('orders')">
         <div class="row-head">
-          <p class="row-ja">我的訂單</p>
+          <p class="row-ja">{{ $t('dashboard.orders_title') }}</p>
           <p class="row-en">Order history</p>
         </div>
-        <p class="row-desc">{{ recentOrders.length === 0 ? "目前沒有訂單。" : `最近 ${recentOrders.length} 筆訂單。` }}</p>
-        <button class="row-link row-tail" type="button" @click.stop="navigateBoard('orders')"><span class="row-count">{{ recentOrders.length }} 筆</span><span class="row-arrow">&gt;</span></button>
+        <p class="row-desc">{{ recentOrders.length === 0 ? $t('dashboard.orders_empty') : $t('dashboard.orders_count', { n: recentOrders.length }) }}</p>
+        <button class="row-link row-tail" type="button" @click.stop="navigateBoard('orders')"><span class="row-count">{{ recentOrders.length }} {{ $t('dashboard.unit_count') }}</span><span class="row-arrow">&gt;</span></button>
       </article>
 
       <article class="board-row" role="button" tabindex="0" @click="navigateBoard('messages')" @keydown.enter="navigateBoard('messages')">
         <div class="row-head">
-          <p class="row-ja">通知中心</p>
+          <p class="row-ja">{{ $t('dashboard.messages_title') }}</p>
           <p class="row-en">Notifications</p>
         </div>
-        <p class="row-desc">{{ recentNotifications.length === 0 ? "目前沒有新通知。" : `最近 ${recentNotifications.length} 則通知。` }}</p>
-        <button class="row-link row-tail" type="button" @click.stop="navigateBoard('messages')"><span class="row-count">{{ unreadCount }} 未讀</span><span class="row-arrow">&gt;</span></button>
+        <p class="row-desc">{{ recentNotifications.length === 0 ? $t('dashboard.messages_empty') : $t('dashboard.messages_count', { n: recentNotifications.length }) }}</p>
+        <button class="row-link row-tail" type="button" @click.stop="navigateBoard('messages')"><span class="row-count">{{ unreadCount }} {{ $t('dashboard.unit_unread') }}</span><span class="row-arrow">&gt;</span></button>
       </article>
 
       <article class="board-row" role="button" tabindex="0" @click="navigateBoard('coupons')" @keydown.enter="navigateBoard('coupons')">
         <div class="row-head">
-          <p class="row-ja">我的折扣券</p>
+          <p class="row-ja">{{ $t('dashboard.coupons_title') }}</p>
           <p class="row-en">My coupons</p>
         </div>
-        <p class="row-desc">查看持有的折扣券與使用狀態。</p>
+        <p class="row-desc">{{ $t('dashboard.coupons_desc') }}</p>
         <button class="row-link" type="button" @click.stop="navigateBoard('coupons')">&gt;</button>
       </article>
 
       <article class="board-row" role="button" tabindex="0" @click="navigateBoard('gacha')" @keydown.enter="navigateBoard('gacha')">
         <div class="row-head">
-          <p class="row-ja">幸運抽獎</p>
+          <p class="row-ja">{{ $t('dashboard.gacha_title') }}</p>
           <p class="row-en">Lucky draw</p>
         </div>
-        <p class="row-desc">每次購買即可抽獎，贏取折扣券！</p>
+        <p class="row-desc">{{ $t('dashboard.gacha_desc') }}</p>
         <button class="row-link" type="button" @click.stop="navigateBoard('gacha')">&gt;</button>
       </article>
 
       <article class="board-row" role="button" tabindex="0" @click="navigateBoard('points')" @keydown.enter="navigateBoard('points')">
         <div class="row-head">
-          <p class="row-ja">回饋點數紀錄</p>
+          <p class="row-ja">{{ $t('dashboard.points_title') }}</p>
           <p class="row-en">Point history</p>
         </div>
-        <p class="row-desc">{{ (salon.points?.items || []).length === 0 ? "目前沒有點數紀錄。" : `最近 ${(salon.points?.items || []).length} 筆點數紀錄。` }}</p>
+        <p class="row-desc">{{ (salon.points?.items || []).length === 0 ? $t('dashboard.points_empty') : $t('dashboard.points_count', { n: (salon.points?.items || []).length }) }}</p>
         <button class="row-link" type="button" @click.stop="navigateBoard('points')">&gt;</button>
+      </article>
+
+      <article class="board-row" role="button" tabindex="0" @click="router.push('/dashboard/timeline')" @keydown.enter="router.push('/dashboard/timeline')">
+        <div class="row-head">
+          <p class="row-ja">{{ $t('dashboard.shipment_title') }}</p>
+          <p class="row-en">Shipment tracking</p>
+        </div>
+        <p class="row-desc">{{ $t('dashboard.shipment_desc') }}</p>
+        <button class="row-link" type="button" @click.stop="router.push('/dashboard/timeline')">&gt;</button>
       </article>
     </section>
 
-    <section v-if="loading" class="state-msg">載入中...</section>
+    <section v-if="loading" class="state-msg">{{ $t('dashboard.loading') }}</section>
     <section v-if="isError && statusText" class="state-msg error">{{ statusText }}</section>
   </div>
 </template>
