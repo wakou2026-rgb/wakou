@@ -11,29 +11,30 @@
         <!-- Navigation Desktop -->
         <nav class="nav-main">
           <RouterLink to="/collections">{{ $t("nav.catalog") }}</RouterLink>
-          <RouterLink to="/magazine">專欄企劃</RouterLink>
+          <RouterLink to="/magazine">{{ $t("nav.magazine") }}</RouterLink>
           <RouterLink to="/about">{{ $t("nav.about") }}</RouterLink>
+
           <RouterLink :to="isLoggedIn ? '/dashboard' : '/login'">{{ $t("nav.dashboard") }}</RouterLink>
-          <RouterLink v-if="isAdminRole" to="/admin">管理控制台</RouterLink>
+          <a v-if="isAdminRole" href="/admin/">{{ $t("nav.admin") }}</a>
           <RouterLink v-if="!isLoggedIn" to="/login">{{ $t("nav.login") }}</RouterLink>
           <button v-else class="logout-btn" @click="handleLogout">{{ $t("nav.logout") || "Logout" }}</button>
         </nav>
 
         <!-- Tools -->
         <div class="nav-tools">
-          <RouterLink v-if="isLoggedIn" to="/dashboard" class="user-chip user-chip-member" aria-label="會員後台">
+          <RouterLink v-if="isLoggedIn" to="/dashboard" class="user-chip user-chip-member" :aria-label="$t('nav.dashboard')">
             <span class="chip-dot" aria-hidden="true"></span>
             <span>{{ accountLabel }}</span>
             <span v-if="roleBadgeText" class="role-badge">{{ roleBadgeText }}</span>
           </RouterLink>
-          <RouterLink v-else to="/login" class="user-chip user-chip-guest">會員登入</RouterLink>
+          <RouterLink v-else to="/login" class="user-chip user-chip-guest">{{ $t("nav.login_guest") }}</RouterLink>
           <RouterLink to="/cart" class="cart-icon-link" :aria-label="$t('nav.cart')">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M7 18c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2Zm10 0c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2ZM7.2 14h9.8c.75 0 1.4-.42 1.72-1.04L22 6.5H6.17L5.27 4H2v2h1.93l2.39 8.01L5.42 16c-.08.2-.12.41-.12.63 0 .76.61 1.37 1.37 1.37H21v-2H7.04l.16-.36Z" />
             </svg>
             <span v-if="cartCount > 0" class="cart-badge">{{ cartCount }}</span>
           </RouterLink>
-          <button v-if="isLoggedIn" class="bell-icon-link" type="button" aria-label="通知" @click="clearNotifAndGo">
+          <button v-if="isLoggedIn" class="bell-icon-link" type="button" aria-label="notifications" @click="clearNotifAndGo">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2Zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2Z" />
             </svg>
@@ -51,10 +52,11 @@
     <!-- Navigation Mobile -->
     <nav class="nav-mobile container">
       <RouterLink to="/collections">{{ $t("nav.catalog") }}</RouterLink>
-      <RouterLink to="/magazine">專欄企劃</RouterLink>
+      <RouterLink to="/magazine">{{ $t("nav.magazine") }}</RouterLink>
       <RouterLink to="/about">{{ $t("nav.about") }}</RouterLink>
+
       <RouterLink :to="isLoggedIn ? '/dashboard' : '/login'">{{ $t("nav.dashboard") }}</RouterLink>
-      <RouterLink v-if="isAdminRole" to="/admin">管理</RouterLink>
+      <a v-if="isAdminRole" href="/admin/">{{ $t("nav.admin_short") }}</a>
     </nav>
 
     <main class="main-content">
@@ -91,7 +93,7 @@
               </svg>
             </a>
           </div>
-          <RouterLink to="/contact" class="contact-link">聯絡我們</RouterLink>
+          <RouterLink to="/contact" class="contact-link">{{ $t("nav.contact") }}</RouterLink>
         </div>
       </div>
     </footer>
@@ -102,11 +104,13 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
+import i18n from "./i18n";
 import { useAuthStore } from "./modules/auth/store";
 import { getCartItems } from "./modules/cart/service";
 import { shouldClearUnreadOnRoute } from "./modules/account/membership";
 
-const { locale } = useI18n();
+const { t } = useI18n({ useScope: "global" });
+const locale = i18n.global.locale;
 const authStore = useAuthStore();
 const router = useRouter();
 const route = useRoute();
@@ -128,19 +132,19 @@ const roleBadgeText = computed(() => {
 });
 const accountLabel = computed(() => {
   if (!isLoggedIn.value) {
-    return "訪客";
+    return t("role.visitor");
   }
   if (authStore.displayName) {
     return authStore.displayName;
   }
   const roleLabel = {
-    admin: "管理員",
-    super_admin: "總管理員",
-    sales: "銷售",
-    maintenance: "維護",
-    buyer: "會員"
+    admin: t("role.admin"),
+    super_admin: t("role.super_admin"),
+    sales: t("role.sales"),
+    maintenance: t("role.maintenance"),
+    buyer: t("role.buyer")
   };
-  return roleLabel[authStore.role] || "會員";
+  return roleLabel[authStore.role] || t("role.buyer");
 });
 const cartCount = ref(0);
 const notificationCount = ref(0);
@@ -164,7 +168,10 @@ function clearNotifAndGo() {
 }
 
 function setLocale(nextLocale) {
-  locale.value = nextLocale;
+  i18n.global.locale.value = nextLocale;
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem("wakou_locale", nextLocale);
+  }
 }
 
 function handleLogout() {
@@ -174,6 +181,12 @@ function handleLogout() {
 
 onMounted(() => {
   syncCartCount();
+  // Restore persisted locale on mount
+  const saved = typeof window !== "undefined" ? window.localStorage.getItem("wakou_locale") : null;
+  const valid = ["zh-Hant", "ja", "en"];
+  if (saved && valid.includes(saved)) {
+    i18n.global.locale.value = saved;
+  }
   if (shouldClearUnreadOnRoute(route.fullPath)) {
     clearUnreadBadgeLocal();
   }

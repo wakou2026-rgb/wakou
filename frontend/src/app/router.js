@@ -7,7 +7,6 @@ import CatalogView from "./views/CatalogView.vue";
 import CartView from "./views/CartView.vue";
 import CheckoutView from "./views/CheckoutView.vue";
 import CommRoomView from "./views/CommRoomView.vue";
-import AdminView from "./views/AdminView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import AccountSectionView from "./views/AccountSectionView.vue";
 import ProductDetailView from "./views/ProductDetailView.vue";
@@ -16,6 +15,7 @@ import ContactView from "./views/ContactView.vue";
 import CollectionView from "./views/CollectionView.vue";
 import MagazineView from "./views/MagazineView.vue";
 import MagazineDetailView from "./views/MagazineDetailView.vue";
+
 
 export const routes = [
   { path: "/", component: HomeView },
@@ -33,8 +33,8 @@ export const routes = [
   { path: "/magazine/:id(.*)", component: MagazineDetailView },
   { path: "/about", component: AboutView },
   { path: "/contact", component: ContactView, meta: { title: "Contact" } },
+  { path: "/warehouse", redirect: "/dashboard/timeline" },
   
-  { path: "/admin", component: AdminView, meta: { requiresAdmin: true, title: "Admin Console" } }
 ];
 
 const router = createRouter({
