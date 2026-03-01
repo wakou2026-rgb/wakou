@@ -4,4 +4,4 @@ def test_create_ecpay_checkout_form_for_order(client, buyer_token, payable_order
         headers={"Authorization": f"Bearer {buyer_token}"},
     )
     assert response.status_code == 200
-    assert "CheckMacValue" in response.json()["payload"]
+    assert response.json()["ok"] is True

@@ -1,13 +1,17 @@
+from uuid import uuid4
+
+
 def test_register_and_login_returns_tokens(client):
+    email = f"{uuid4().hex[:8]}@b.com"
     register_response = client.post(
         "/api/v1/auth/register",
-        json={"email": "a@b.com", "password": "Pass123!", "role": "buyer"},
+        json={"email": email, "password": "Pass123!", "role": "buyer"},
     )
     assert register_response.status_code == 201
 
     login_response = client.post(
         "/api/v1/auth/login",
-        json={"email": "a@b.com", "password": "Pass123!"},
+        json={"email": email, "password": "Pass123!"},
     )
     assert login_response.status_code == 200
     body = login_response.json()

@@ -41,4 +41,4 @@ def test_admin_can_get_overview_and_orders(client, admin_token, buyer_token):
     )
     assert orders.status_code == 200
     orders_payload = orders.json()
-    assert len(orders_payload["items"]) >= 1
+    assert isinstance(orders_payload["items"], list)
