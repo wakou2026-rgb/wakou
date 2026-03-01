@@ -1,7 +1,9 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { browseCatalog, fetchPublicMagazines } from "../../modules/catalog/service";
 
+const { locale } = useI18n();
 const magazines = ref([]);
 const newArrivals = ref([]);
 const currentSlide = ref(0);
@@ -81,10 +83,10 @@ function formatPrice(val) {
       <div class="hero-content">
         <h1 class="hero-title">{{ $t('home.welcome') }}</h1>
         <p class="hero-desc">
-          不僅是一個商店，更是一個策展藝廊。每一件選物都有其歷史與靈魂。透過透明的履歷與專屬的確認機制，消除古董交易的距離感。
+          {{ $t('home.hero_desc') }}
         </p>
         <div class="hero-actions">
-          <RouterLink class="btn btn-primary" to="/catalog">探索藏品</RouterLink>
+          <RouterLink class="btn btn-primary" to="/catalog">{{ $t('home.explore_cta') }}</RouterLink>
         </div>
       </div>
       <div class="hero-visual">
@@ -108,8 +110,8 @@ function formatPrice(val) {
             />
             </div>
             <div class="mag-info">
-              <p class="eyebrow">LATEST JOURNAL</p>
-              <h3>{{ latestMagazine.title || "最新專欄" }}</h3>
+              <p class="eyebrow">{{ $t('home.latest_journal') }}</p>
+              <h3>{{ latestMagazine.title || $t('home.latest_journal_title') }}</h3>
               <p class="mag-date" v-if="latestMagazine.publishedAt">{{ latestMagazine.publishedAt }}</p>
               <p class="mag-category">JOURNAL / Wakou</p>
             </div>
@@ -120,8 +122,8 @@ function formatPrice(val) {
             <img src="https://picsum.photos/seed/wakou-mag/900/1200" alt="Journal" />
           </div>
           <div class="mag-info">
-            <p class="eyebrow">LATEST JOURNAL</p>
-            <h3>最新專欄</h3>
+            <p class="eyebrow">{{ $t('home.latest_journal') }}</p>
+            <h3>{{ $t('home.latest_journal_title') }}</h3>
             <p class="mag-category">JOURNAL / Wakou</p>
           </div>
         </template>
@@ -129,7 +131,7 @@ function formatPrice(val) {
 
       <div class="discover-arrivals">
         <div class="arrivals-header">
-          <p class="arrivals-label">NEW ARRIVALS</p>
+          <p class="arrivals-label">{{ $t('home.new_arrivals') }}</p>
         </div>
         <div class="arrivals-carousel" v-if="newArrivals.length > 0">
           <button class="carousel-arrow carousel-prev" @click="prevSlide" aria-label="Previous">&lsaquo;</button>
@@ -152,11 +154,11 @@ function formatPrice(val) {
           <button class="carousel-arrow carousel-next" @click="nextSlide" aria-label="Next">&rsaquo;</button>
         </div>
         <div v-else class="arrivals-empty">
-          <p>新品即將上架</p>
+          <p>{{ $t('home.new_arrivals_empty') }}</p>
         </div>
         <div class="arrivals-cta">
           <RouterLink class="btn-cta" to="/collections">
-            <span>SHOP NOW</span>
+            <span>{{ $t('home.shop_now') }}</span>
             <span class="cta-arrow">›</span>
           </RouterLink>
         </div>
@@ -168,9 +170,9 @@ function formatPrice(val) {
     <!-- Selection Flow -->
     <section class="selection-flow">
       <div class="section-intro">
-        <p class="eyebrow">Selection Protocol</p>
-        <h2 class="page-title">選貨流程</h2>
-        <p class="page-meta">以職人檢視為基準，將來源、品況、流通資訊逐步公開，讓每件藏品的來歷可被理解。</p>
+        <p class="eyebrow">{{ $t('home.selection_eyebrow') }}</p>
+        <h2 class="page-title">{{ $t('home.selection_title') }}</h2>
+        <p class="page-meta">{{ $t('home.selection_desc') }}</p>
       </div>
 
       <div class="flow-list">
@@ -178,11 +180,11 @@ function formatPrice(val) {
           <div class="step-watermark">01</div>
           <div class="step-grid">
             <div class="step-info">
-              <h3 class="step-title">Step 1. Sourcing</h3>
-              <p class="step-desc">從合作來源挑選原件，先完成來源核對與入庫編號，避免不明流通紀錄。</p>
+              <h3 class="step-title">{{ $t('home.step1_title') }}</h3>
+              <p class="step-desc">{{ $t('home.step1_desc') }}</p>
             </div>
             <div class="step-media img-frame">
-              <img src="https://picsum.photos/seed/wakou-craft-1/1200/800" alt="Selection Step One" />
+              <img src="/Exclusive Acquisition.png" alt="Exclusive Acquisition" />
             </div>
           </div>
         </article>
@@ -191,11 +193,11 @@ function formatPrice(val) {
           <div class="step-watermark">02</div>
           <div class="step-grid">
             <div class="step-info">
-              <h3 class="step-title">Step 2. Artisan Review</h3>
-              <p class="step-desc">由職人檢視外觀、機能與可修復性，記錄細節狀態並建立品況說明。</p>
+              <h3 class="step-title">{{ $t('home.step2_title') }}</h3>
+              <p class="step-desc">{{ $t('home.step2_desc') }}</p>
             </div>
             <div class="step-media img-frame">
-              <img src="https://picsum.photos/seed/wakou-leather-2/1200/800" alt="Selection Step Two" />
+              <img src="/Restoration & Packaging.png" alt="Restoration & Packaging" />
             </div>
           </div>
         </article>
@@ -204,11 +206,11 @@ function formatPrice(val) {
           <div class="step-watermark">03</div>
           <div class="step-grid">
             <div class="step-info">
-              <h3 class="step-title">Step 3. Curated Listing</h3>
-              <p class="step-desc">確認資料完整後上架，並於交易溝通室提供近照、補充資訊與最終報價。</p>
+              <h3 class="step-title">{{ $t('home.step3_title') }}</h3>
+              <p class="step-desc">{{ $t('home.step3_desc') }}</p>
             </div>
             <div class="step-media img-frame">
-              <img src="https://picsum.photos/seed/wakou-atelier-3/1200/800" alt="Selection Step Three" />
+              <img src="/Premium Showcase.png" alt="Premium Showcase" />
             </div>
           </div>
         </article>

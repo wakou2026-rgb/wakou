@@ -1,10 +1,15 @@
+<script setup>
+import { useI18n } from "vue-i18n";
+const { t } = useI18n();
+</script>
+
 <template>
   <div class="contact-page container">
     <section class="contact-shell panel">
       <aside class="contact-title">
         <p class="eyebrow">Contact</p>
-        <h1 class="page-title">聯絡我們</h1>
-        <p class="page-meta">預約看貨、代尋諮詢與售後確認，皆可由以下方式聯繫。</p>
+        <h1 class="page-title">{{ $t('contact.title') }}</h1>
+        <p class="page-meta">{{ $t('contact.subtitle') }}</p>
       </aside>
 
       <div class="contact-content">
@@ -12,7 +17,7 @@
           <p class="row-head">Email</p>
           <div>
             <a class="line-link" href="mailto:wakou2026@gmail.com">wakou2026@gmail.com</a>
-            <p class="hint">營業時間 11:00 - 20:00，通常 24 小時內回覆。</p>
+            <p class="hint">{{ $t('contact.hours_hint') }}</p>
           </div>
         </article>
 
@@ -20,7 +25,7 @@
           <p class="row-head">Instagram</p>
           <div>
             <a class="line-link" href="https://www.instagram.com/" target="_blank" rel="noopener noreferrer">@wakou_select</a>
-            <p class="hint">新品預告與上架通知。</p>
+            <p class="hint">{{ $t('contact.ig_hint') }}</p>
           </div>
         </article>
 
@@ -28,15 +33,15 @@
           <p class="row-head">YouTube</p>
           <div>
             <a class="line-link" href="https://www.youtube.com/" target="_blank" rel="noopener noreferrer">Wakou Vintage Select</a>
-            <p class="hint">選務觀點與品牌特輯。</p>
+            <p class="hint">{{ $t('contact.yt_hint') }}</p>
           </div>
         </article>
 
         <article class="contact-row">
           <p class="row-head">Inquiry</p>
           <div>
-            <p class="hint">可先於藏品頁選定商品，再進入諮詢室確認細節與報價。</p>
-            <RouterLink class="btn btn-primary" to="/collections">前往藏品藝廊</RouterLink>
+            <p class="hint">{{ $t('contact.inquiry_hint') }}</p>
+            <RouterLink class="btn btn-primary" to="/collections">{{ $t('contact.go_gallery') }}</RouterLink>
           </div>
         </article>
       </div>

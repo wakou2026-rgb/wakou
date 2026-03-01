@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { fetchProductDetail } from "../../modules/catalog/service";
 import { useAuthStore } from "../../modules/auth/store";
@@ -9,6 +10,7 @@ import { createOrder } from "../../modules/checkout/service";
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const { t, locale } = useI18n();
 
 const item = ref(null);
 const loading = ref(true);
@@ -35,7 +37,7 @@ async function loadDetail() {
   statusText.value = "";
   try {
     const productId = route.params.id;
-    item.value = await fetchProductDetail(productId);
+    item.value = await fetchProductDetail(productId, { lang: locale.value });
   } catch (error) {
     isError.value = true;
     statusText.value = error instanceof Error ? error.message : "load detail failed";
@@ -46,12 +48,34 @@ async function loadDetail() {
 
 onMounted(loadDetail);
 
+watch(locale, () => {
+  loadDetail();
+});
+
+function localizeField(val) {
+  const l = locale.value || "zh-Hant";
+  if (!val) return "";
+  if (typeof val === "string") {
+    try {
+      const obj = JSON.parse(val);
+      if (typeof obj === "object" && obj !== null) {
+        return obj[l] || obj["zh-Hant"] || obj["en"] || Object.values(obj)[0] || val;
+      }
+    } catch {}
+    return val;
+  }
+  if (typeof val === "object") {
+    return val[l] || val["zh-Hant"] || val["en"] || Object.values(val)[0] || "";
+  }
+  return String(val);
+}
+
 function addToCart() {
   if (!item.value) {
     return;
   }
   addCartItem(item.value);
-  statusText.value = "已加入購物車";
+  statusText.value = t("product.added_cart");
 }
 
 function promptInquiryOrder() {
@@ -112,13 +136,13 @@ async function confirmOrder() {
       <section class="summary panel">
         <p class="eyebrow">Product Detail</p>
         <h1>{{ item.name }}</h1>
-        <p class="meta">{{ item.sku }} ・ {{ item.category }} ・ Grade {{ item.grade }}</p>
+        <p class="meta">{{ item.sku }} ・ {{ localizeField(item.category) }} ・ Grade {{ item.grade }}</p>
         <p class="price">NT$ {{ item.priceTwd.toLocaleString() }}</p>
-        <p class="desc">{{ item.description || "此件藏品提供多角度細節照，實際成交前可於專屬諮詢室進一步確認品況、運費與出貨時程。" }}</p>
+        <p class="desc">{{ item.description || $t('product.desc_fallback') }}</p>
 
         <div class="actions">
-          <button class="btn btn-primary" @click="promptInquiryOrder">發起諮詢並下單</button>
-          <button class="btn btn-muted" @click="addToCart">加入購物車</button>
+          <button class="btn btn-primary" @click="promptInquiryOrder">{{ $t('product.inquiry_btn') }}</button>
+          <button class="btn btn-muted" @click="addToCart">{{ $t('product.add_cart') }}</button>
         </div>
 
         <p v-if="statusText" class="status-msg" :class="isError ? 'status-err' : 'status-ok'">{{ statusText }}</p>
@@ -128,11 +152,11 @@ async function confirmOrder() {
     <!-- Confirm Modal -->
     <div v-if="showConfirmModal" class="modal-overlay" @click="showConfirmModal = false">
       <div class="modal-content" @click.stop>
-        <h3 style="margin-top:0;">確認發起諮詢</h3>
-        <p>此商品為手工/高價物件，將為您開啟專屬諮詢室確認細節（如運費、實物照）。<br><br>確認後即會建立專屬諮詢訂單。</p>
+        <h3 style="margin-top:0;">{{ $t('product.modal_title') }}</h3>
+        <p>{{ $t('product.modal_body') }}</p>
         <div class="modal-actions" style="margin-top: 1.5rem; display: flex; gap: 0.8rem; justify-content: flex-end;">
-          <button class="btn btn-muted" @click="showConfirmModal = false" :disabled="isProcessing">取消</button>
-          <button class="btn btn-primary" @click="confirmOrder" :disabled="isProcessing">{{ isProcessing ? '處理中...' : '確認發起' }}</button>
+          <button class="btn btn-muted" @click="showConfirmModal = false" :disabled="isProcessing">{{ $t('product.cancel') }}</button>
+          <button class="btn btn-primary" @click="confirmOrder" :disabled="isProcessing">{{ isProcessing ? $t('product.processing') : $t('product.confirm') }}</button>
         </div>
       </div>
     </div>

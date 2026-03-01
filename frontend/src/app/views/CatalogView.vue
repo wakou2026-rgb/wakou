@@ -1,10 +1,12 @@
 <script setup>
 import { onMounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { browseCatalog } from "../../modules/catalog/service";
-
 const route = useRoute();
 const router = useRouter();
+
+const { locale, t } = useI18n();
 
 const currentCategory = ref(route.query.cat || "all");
 const items = ref([]);
@@ -18,7 +20,7 @@ async function loadCatalog() {
   isLoading.value = true;
   errorText.value = "";
   try {
-    const payload = { lang: "zh-Hant" };
+    const payload = { lang: locale.value };
     if (currentCategory.value !== "all") {
       payload.category = currentCategory.value;
     }
@@ -29,7 +31,7 @@ async function loadCatalog() {
     if (catRes.ok) {
       const data = await catRes.json();
       const cat = data.items.find((entry) => entry.id === currentCategory.value);
-      categoryTitle.value = cat ? cat.title : "COLLECTION";
+      categoryTitle.value = cat ? localizeField(cat.title, locale.value) : "COLLECTION";
     }
   } catch (error) {
     errorText.value = error instanceof Error ? error.message : "load catalog failed";
@@ -46,11 +48,32 @@ watch(
   }
 );
 
+watch(locale, () => {
+  loadCatalog();
+});
+
 function goDetail(id) {
   router.push(`/catalog/${id}`);
 }
 
 onMounted(loadCatalog);
+function localizeField(val, lang) {
+  const l = lang || locale.value || "zh-Hant";
+  if (!val) return "";
+  if (typeof val === "string") {
+    try {
+      const obj = JSON.parse(val);
+      if (typeof obj === "object" && obj !== null) {
+        return obj[l] || obj["zh-Hant"] || obj["en"] || Object.values(obj)[0] || val;
+      }
+    } catch {}
+    return val;
+  }
+  if (typeof val === "object") {
+    return val[l] || val["zh-Hant"] || val["en"] || Object.values(val)[0] || "";
+  }
+  return String(val);
+}
 </script>
 
 <template>
@@ -62,7 +85,7 @@ onMounted(loadCatalog);
 
     <div v-if="isLoading" class="state-msg">Loading...</div>
     <div v-else-if="errorText" class="state-msg error">{{ errorText }}</div>
-    <div v-else-if="items.length === 0" class="empty-state">此分類目前尚無商品。</div>
+    <div v-else-if="items.length === 0" class="empty-state">{{ $t('catalog.empty_category') }}</div>
 
     <section v-else class="product-grid" aria-label="product listing">
       <article v-for="item in items" :key="item.id" class="product-card" @click="goDetail(item.id)">
@@ -71,7 +94,7 @@ onMounted(loadCatalog);
         </div>
 
         <div class="card-copy">
-          <p class="card-kicker">{{ item.category || currentCategory }}</p>
+          <p class="card-kicker">{{ localizeField(item.category) || localizeField(currentCategory) }}</p>
           <h2>{{ item.name }}</h2>
           <p class="price">NT$ {{ Number(item.priceTwd).toLocaleString() }}</p>
 

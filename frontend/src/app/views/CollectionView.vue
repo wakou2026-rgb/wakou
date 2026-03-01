@@ -1,8 +1,10 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 
 const router = useRouter();
+const { t } = useI18n();
 
 const collections = ref([]);
 const isLoading = ref(true);
@@ -14,7 +16,11 @@ async function loadCategories() {
     const res = await fetch("/api/v1/categories");
     if (res.ok) {
       const data = await res.json();
-      collections.value = data.items || [];
+      collections.value = (data.items || []).map((item) => ({
+        id: item.id,
+        image: item.image,
+        title: (item.title && (item.title["zh-Hant"] || item.title.en)) || item.id,
+      }));
     }
   } catch (err) {
     console.error(err);
@@ -41,7 +47,7 @@ onMounted(loadCategories);
 
 <template>
   <div class="collection-page container">
-    <div v-if="isLoading" class="loading-state">載入中...</div>
+    <div v-if="isLoading" class="loading-state">{{ $t('collection.loading') }}</div>
     
     <div v-else class="collection-grid">
       <section v-for="col in collections" :key="col.id" class="collection-block" @click="goTo(col.id)">

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { 
   fetchCommRoom, 
   sendMessage, 
@@ -13,6 +14,7 @@ import { useAuthStore } from "../../modules/auth/store";
 
 const route = useRoute();
 const authStore = useAuthStore();
+const { t } = useI18n();
 const room = ref(null);
 const statusText = ref("");
 const isError = ref(false);
@@ -46,7 +48,7 @@ async function loadRoom() {
     }
   } catch (error) {
     isError.value = true;
-    statusText.value = "目前無法讀取此溝通室。請先從個人後台建立訂單後再進入。";
+    statusText.value = t("comm_room.load_error");
   }
 }
 
@@ -75,7 +77,7 @@ async function submitQuote() {
   isError.value = false;
   try {
     await submitFinalQuote(route.params.id, quoteForm);
-    statusText.value = "報價已更新並送出給買家。";
+    statusText.value = t("comm_room.quote_sent");
     await loadRoom();
   } catch (error) {
     isError.value = true;
@@ -90,7 +92,7 @@ async function handleAcceptQuote() {
   isError.value = false;
   try {
     await acceptQuote(route.params.id);
-    statusText.value = "已接受報價，請繼續上傳匯款證明。";
+    statusText.value = t("comm_room.quote_accepted");
     await loadRoom();
   } catch (error) {
     isError.value = true;
@@ -106,7 +108,7 @@ async function submitProof() {
   isError.value = false;
   try {
     await uploadTransferProof(route.params.id, { transfer_proof_url: proofForm.transfer_proof_url });
-    statusText.value = "匯款證明已上傳，等待管理員確認。";
+    statusText.value = t("comm_room.proof_uploaded_msg");
     await loadRoom();
   } catch (error) {
     isError.value = true;
@@ -121,7 +123,7 @@ async function handleConfirmPayment() {
   isError.value = false;
   try {
     await confirmPayment(room.value.order_id);
-    statusText.value = "已確認收款，訂單完成。";
+    statusText.value = t("comm_room.payment_confirmed");
     await loadRoom();
   } catch (error) {
     isError.value = true;
@@ -145,7 +147,7 @@ onMounted(loadRoom);
     <header class="page-header">
       <p class="eyebrow">Exclusive Service</p>
       <h1 class="page-title">{{ $t("nav.concierge") }}</h1>
-      <p class="page-meta">專屬諮詢室：請於此確認商品細節、實物照及最終報價。</p>
+      <p class="page-meta">{{ $t('comm_room.page_meta') }}</p>
     </header>
 
     <div class="divider"></div>
@@ -160,7 +162,7 @@ onMounted(loadRoom);
         </div>
         <div class="product-info">
           <h3>{{ room.product_name }}</h3>
-          <p class="meta">原價: NT$ {{ (room.order?.amount_twd || 0).toLocaleString() }}</p>
+          <p class="meta">{{ $t('comm_room.price_label') }}: NT$ {{ (room.order?.amount_twd || 0).toLocaleString() }}</p>
           <div class="order-status-box">
             <span class="status-badge" :class="room.order?.status">{{ room.order?.status }}</span>
           </div>
@@ -168,19 +170,19 @@ onMounted(loadRoom);
 
         <div class="quote-summary" v-if="room.order?.status !== 'inquiring' && room.order?.status !== 'waiting_quote'">
           <div class="quote-row">
-            <span>議定商品價</span>
+            <span>{{ $t('comm_room.thread_price_label') }}</span>
             <span>NT$ {{ (room.order?.final_price_twd || 0).toLocaleString() }}</span>
           </div>
           <div class="quote-row">
-            <span>運費</span>
+            <span>{{ $t('comm_room.shipping_label') }}</span>
             <span>NT$ {{ (room.order?.shipping_fee_twd || 0).toLocaleString() }}</span>
           </div>
           <div class="quote-row discount" v-if="room.order?.discount_twd">
-            <span>優惠折抵</span>
+            <span>{{ $t('comm_room.discount_label') }}</span>
             <span>- NT$ {{ (room.order?.discount_twd || 0).toLocaleString() }}</span>
           </div>
           <div class="quote-row total">
-            <span>總計</span>
+            <span>{{ $t('comm_room.total_label') }}</span>
             <span>NT$ {{ ((room.order?.final_price_twd || 0) + (room.order?.shipping_fee_twd || 0) - (room.order?.discount_twd || 0)).toLocaleString() }}</span>
           </div>
         </div>
@@ -203,13 +205,13 @@ onMounted(loadRoom);
           >
             <div v-if="msg.from !== 'system'" class="msg-avatar">{{ msg.from === 'admin' ? 'W' : 'B' }}</div>
             <div class="msg-body">
-              <span v-if="msg.from !== 'system'" class="msg-sender">{{ msg.from === 'admin' ? '官方客服' : '買家' }}</span>
+              <span v-if="msg.from !== 'system'" class="msg-sender">{{ msg.from === 'admin' ? $t('comm_room.official_service') : $t('comm_room.buyer_label') }}</span>
               <div v-if="msg.from === 'system'" class="system-text">{{ msg.message }} <span class="time">{{ formatDate(msg.timestamp) }}</span></div>
               <div v-else class="msg-bubble">
                 <p v-if="msg.message" class="msg-text">{{ msg.message }}</p>
                 <div v-if="msg.image_url" class="msg-image-wrap">
                   <img :src="msg.image_url" alt="Attached image" class="msg-image" />
-                  <div v-if="msg.from === 'admin'" class="cert-badge">✓ 官方認證實拍</div>
+                  <div v-if="msg.from === 'admin'" class="cert-badge">{{ $t('comm_room.cert_badge') }}</div>
                 </div>
                 <span class="time-meta">{{ formatDate(msg.timestamp) }}</span>
               </div>
@@ -219,68 +221,68 @@ onMounted(loadRoom);
 
         <div class="chat-input-area" v-if="room.order?.status !== 'paid' && room.order?.status !== 'completed'">
           <form @submit.prevent="sendChat" class="chat-form">
-            <input v-model="messageForm.image_url" type="text" class="field compact" placeholder="圖片網址 (選填)" />
+            <input v-model="messageForm.image_url" type="text" class="field compact" :placeholder="$t('comm_room.placeholder_image')" />
             <div class="input-row">
-              <input v-model="messageForm.message" type="text" class="field" placeholder="輸入訊息..." />
-              <button class="btn btn-primary" type="submit" :disabled="isProcessing">發送</button>
+              <input v-model="messageForm.message" type="text" class="field" :placeholder="$t('comm_room.placeholder_message')" />
+              <button class="btn btn-primary" type="submit" :disabled="isProcessing">{{ $t('comm_room.send') }}</button>
             </div>
           </form>
         </div>
       </section>
 
       <aside class="action-column panel">
-        <h3>交易操作</h3>
+        <h3>{{ $t('comm_room.action_title') }}</h3>
         <p v-if="statusText" class="status-msg" :class="isError ? 'status-err' : 'status-ok'">{{ statusText }}</p>
 
         <form v-if="isManager && (room.order?.status === 'inquiring' || room.order?.status === 'waiting_quote' || room.order?.status === 'quoted')" class="action-block" @submit.prevent="submitQuote">
-          <h4>設定最終報價</h4>
+          <h4>{{ $t('comm_room.set_quote') }}</h4>
           <div class="form-group">
-            <label>議定商品價格 (NT$)</label>
+            <label>{{ $t('comm_room.price_field') }}</label>
             <input v-model.number="quoteForm.final_price_twd" class="field" type="number" min="0" required />
           </div>
           <div class="form-group">
-            <label>運費 (NT$)</label>
+            <label>{{ $t('comm_room.shipping_field') }}</label>
             <input v-model.number="quoteForm.shipping_fee_twd" class="field" type="number" min="0" required />
           </div>
           <div class="form-group">
-            <label>優惠折抵 (NT$)</label>
+            <label>{{ $t('comm_room.discount_field') }}</label>
             <input v-model.number="quoteForm.discount_twd" class="field" type="number" min="0" />
           </div>
-          <button class="btn btn-muted w-full" type="submit" :disabled="isProcessing">發送最終報價</button>
+          <button class="btn btn-muted w-full" type="submit" :disabled="isProcessing">{{ $t('comm_room.send_quote') }}</button>
         </form>
 
         <div v-if="!isManager && room.order?.status === 'quoted'" class="action-block">
-          <h4>管理員已提供最終報價</h4>
-          <p class="meta mb-4">請確認左側總計金額，若同意請點擊下方按鈕。</p>
-          <button class="btn btn-primary w-full" @click="handleAcceptQuote" :disabled="isProcessing">接受報價並前往付款</button>
+          <h4>{{ $t('comm_room.accept_quote_title') }}</h4>
+          <p class="meta mb-4">{{ $t('comm_room.accept_quote_hint') }}</p>
+          <button class="btn btn-primary w-full" @click="handleAcceptQuote" :disabled="isProcessing">{{ $t('comm_room.accept_quote_btn') }}</button>
         </div>
 
         <form v-if="!isManager && (room.order?.status === 'buyer_accepted' || room.order?.status === 'proof_uploaded')" class="action-block" @submit.prevent="submitProof">
-          <h4>匯款資訊</h4>
+          <h4>{{ $t('comm_room.bank_title') }}</h4>
           <div class="bank-details">
-            <p>銀行：和光銀行 (808)</p>
-            <p>帳號：1234-567-890123</p>
-            <p>戶名：和光精選有限公司</p>
+            <p>{{ $t('comm_room.bank_name') }}</p>
+            <p>{{ $t('comm_room.bank_account') }}</p>
+            <p>{{ $t('comm_room.bank_holder') }}</p>
           </div>
-          <p class="meta mt-2 mb-2">請完成匯款後，上傳匯款截圖或憑證網址。</p>
+          <p class="meta mt-2 mb-2">{{ $t('comm_room.upload_hint') }}</p>
           <div class="form-group">
             <input v-model="proofForm.transfer_proof_url" class="field" type="text" placeholder="https://... (圖片網址)" required />
           </div>
           <button class="btn btn-primary w-full" type="submit" :disabled="isProcessing">
-            {{ room.order?.status === 'proof_uploaded' ? '重新上傳憑證' : '送出匯款證明' }}
+            {{ room.order?.status === 'proof_uploaded' ? $t('comm_room.reupload_proof') : $t('comm_room.upload_proof') }}
           </button>
         </form>
 
         <div v-if="isManager && room.order?.status === 'proof_uploaded'" class="action-block">
-          <h4>買家已上傳匯款證明</h4>
-          <p class="meta mb-2">憑證網址：</p>
+          <h4>{{ $t('comm_room.confirm_payment_title') }}</h4>
+          <p class="meta mb-2">{{ $t('comm_room.proof_url_label') }}</p>
           <a :href="room.order?.transfer_proof_url" target="_blank" class="proof-link">{{ room.order?.transfer_proof_url }}</a>
-          <button class="btn btn-primary w-full mt-4" @click="handleConfirmPayment" :disabled="isProcessing">確認收款 (完成訂單)</button>
+          <button class="btn btn-primary w-full mt-4" @click="handleConfirmPayment" :disabled="isProcessing">{{ $t('comm_room.confirm_payment_btn') }}</button>
         </div>
 
         <div v-if="room.order?.status === 'paid' || room.order?.status === 'completed'" class="action-block success-block">
-          <h4>交易已完成</h4>
-          <p class="meta">款項已確認，商品將盡快安排出貨。</p>
+          <h4>{{ $t('comm_room.completed_title') }}</h4>
+          <p class="meta">{{ $t('comm_room.completed_desc') }}</p>
         </div>
       </aside>
     </div>

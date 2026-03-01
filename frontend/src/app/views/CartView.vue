@@ -1,8 +1,10 @@
 <script setup>
 import { computed, ref } from "vue";
 import { getCartItems, removeCartItem, updateCartQty } from "../../modules/cart/service";
+import { useI18n } from "vue-i18n";
 
 const lines = ref(getCartItems());
+const { t } = useI18n();
 
 const total = computed(() =>
   lines.value.reduce((sum, item) => sum + Number(item.priceTwd || 0) * Number(item.qty || 1), 0)
@@ -27,8 +29,8 @@ function removeLine(itemId) {
     <div class="divider"></div>
 
     <div v-if="lines.length === 0" class="empty-state">
-      <p>您的收藏清單目前為空。</p>
-      <RouterLink class="btn btn-primary" to="/collections">返回藝廊</RouterLink>
+      <p>{{ $t('cart.empty') }}</p>
+      <RouterLink class="btn btn-primary" to="/collections">{{ $t('cart.return_gallery') }}</RouterLink>
     </div>
 
     <div v-else class="cart-layout">
@@ -58,7 +60,7 @@ function removeLine(itemId) {
                 />
               </div>
               <button class="remove-btn" @click="removeLine(item.id)">
-                移除
+                {{ $t('cart.remove') }}
               </button>
             </div>
           </div>
@@ -67,20 +69,20 @@ function removeLine(itemId) {
 
       <!-- Summary Panel -->
       <aside class="cart-summary panel">
-        <h3 class="summary-title">Summary</h3>
+        <h3 class="summary-title">{{ $t('cart.summary_title') }}</h3>
         <div class="summary-row">
-          <span>Subtotal</span>
+          <span>{{ $t('cart.subtotal') }}</span>
           <span>NT$ {{ total.toLocaleString() }}</span>
         </div>
         <div class="summary-row">
           <span>Shipping</span>
-          <span class="calc-later">TBD in Comm Room</span>
+          <span>{{ $t('cart.shipping_tbd') }}</span>
         </div>
         <div class="summary-total">
-          <span>Total</span>
+          <span>{{ $t('cart.total') }}</span>
           <span>NT$ {{ total.toLocaleString() }}</span>
         </div>
-        <RouterLink class="btn btn-primary w-full" to="/checkout">Proceed to Checkout</RouterLink>
+        <RouterLink class="btn btn-primary w-full" to="/checkout">{{ $t('cart.proceed_checkout') }}</RouterLink>
       </aside>
     </div>
   </div>

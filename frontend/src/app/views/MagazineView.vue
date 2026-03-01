@@ -1,7 +1,9 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { fetchPublicMagazines } from "../../modules/catalog/service";
 
+const { t } = useI18n();
 const isLoading = ref(true);
 const errorText = ref("");
 const activeBrand = ref("ALL");
@@ -50,7 +52,7 @@ async function loadMagazines() {
       image_url: item.image_url,
       gallery_urls: Array.isArray(item.gallery_urls) ? item.gallery_urls : [],
       published_at: item.published_at,
-      status: item.status || "published"
+      status: item.published === false ? "archived" : "published"
     }));
     articles.value = rows.filter((item) => item.status !== "archived");
   } catch (error) {
@@ -68,7 +70,7 @@ onMounted(loadMagazines);
     <header class="intro">
       <p class="eyebrow">Editorial Journal</p>
       <h1 class="page-title">Magazine</h1>
-      <p class="page-meta">以職人視角記錄品牌脈絡、材質工藝與穿戴觀點。</p>
+      <p class="page-meta">{{ $t('magazine.page_meta') }}</p>
     </header>
 
     <section class="filter-bar" aria-label="brand filters">
@@ -83,7 +85,7 @@ onMounted(loadMagazines);
       </button>
     </section>
 
-    <div v-if="isLoading" class="state-msg">載入文章中...</div>
+    <div v-if="isLoading" class="state-msg">{{ $t('magazine.loading_articles') }}</div>
     <div v-else-if="errorText" class="state-msg error">{{ errorText }}</div>
 
     <template v-else>
@@ -115,7 +117,7 @@ onMounted(loadMagazines);
         </article>
       </section>
 
-      <div v-if="filteredArticles.length === 0" class="empty-state">該品牌目前尚無文章。</div>
+      <div v-if="filteredArticles.length === 0" class="empty-state">{{ $t('magazine.brand_empty') }}</div>
     </template>
   </div>
 </template>
