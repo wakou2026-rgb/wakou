@@ -15,7 +15,18 @@ from sqlalchemy.orm import Session
 
 
 
-from ...core.db import get_db_session
+from ...core.db import SessionLocal, get_db_session
+import app.core.state as state_mod
+from ...core.helpers import (
+    _find_product_cache,
+    _get_user_dict,
+    _normalize_product_description,
+    _normalize_product_name,
+    _require_roles,
+)
+from ...core.state import PRODUCT_ADMIN_ROLES
+from ...core.schemas import AdminProductPayload as LegacyAdminProductPayload
+from ...core.schemas import AdminProductUpdatePayload as LegacyAdminProductUpdatePayload
 
 from ...modules.auth.dependencies import require_role
 
@@ -113,127 +124,127 @@ def product_detail(
     )
 
 
-@admin_router.get("", response_model=ProductListResponse)
-def admin_list_products(
-    q: str | None = None,
-    category: str | None = None,
-    availability: str | None = None,
-    lang: str = "en",
-    session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin", "sales", "maintenance"])),
-) -> ProductListResponse:
-    items = [
-        _build_product_item(p, lang)
-        for p in list_products(session, category=category, availability=availability, q=q)
-    ]
-    return ProductListResponse(items=items)
+@admin_router.get("")
+def admin_list_products(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
+    _require_roles(user, PRODUCT_ADMIN_ROLES)
+    return {
+        "items": sorted(
+            state_mod.PRODUCTS,
+            key=lambda item: int(item.get("id") or 0),
+            reverse=True,
+        )
+    }
 
 
-@admin_router.post("", response_model=ProductDetailResponse, status_code=201)
+@admin_router.post("", status_code=201)
 def admin_create_product(
-    payload: AdminProductPayload,
-    session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin"])),
-) -> ProductDetailResponse:
-    from sqlalchemy import select as _select
-    existing = session.scalar(_select(Product).where(Product.sku == payload.sku))
-    if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="sku already exists")
-    names: dict[str, str] = payload.name or {}
-    desc: dict[str, str] = payload.description or {}
-    product = Product(
+    payload: LegacyAdminProductPayload,
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    _require_roles(user, PRODUCT_ADMIN_ROLES)
+
+    normalized_name = _normalize_product_name(payload.name, payload.sku)
+    normalized_description = _normalize_product_description(payload.description, normalized_name["zh-Hant"])
+    image_urls = [url.strip() for url in (payload.image_urls or []) if url.strip()]
+
+    session = SessionLocal()
+    next_id = max([item["id"] for item in state_mod.PRODUCTS], default=0) + 1
+    db_product = Product(
+        id=next_id,
         sku=payload.sku,
         category=payload.category,
-        name_zh_hant=names.get("zh-Hant", ""),
-        name_ja=names.get("ja", ""),
-        name_en=names.get("en", ""),
+        name_zh_hant=normalized_name["zh-Hant"],
+        name_ja=normalized_name["ja"],
+        name_en=normalized_name["en"],
         price_twd=payload.price_twd,
         grade=payload.grade,
-        availability=payload.availability,
-        tags_json=json.dumps(payload.tags or []),
-        brand=payload.brand,
-        size=payload.size,
-        listed_at=payload.listed_at,
-        description_zh=desc.get("zh-Hant", ""),
-        description_ja=desc.get("ja", ""),
-        description_en=desc.get("en", ""),
-        preview_images_json=json.dumps(payload.preview_images or []),
-        detail_images_json=json.dumps(payload.detail_images or []),
-        stock_qty=payload.stock_qty,
-        cost_twd=payload.cost_twd,
     )
-    session.add(product)
+    session.add(db_product)
     session.commit()
-    session.refresh(product)
-    return ProductDetailResponse(**_build_product_item(product, "en").model_dump())
+    session.close()
+
+    item = {
+        "id": next_id,
+        "sku": payload.sku,
+        "category": payload.category,
+        "name": normalized_name,
+        "description": normalized_description,
+        "price_twd": payload.price_twd,
+        "grade": payload.grade,
+        "image_urls": image_urls,
+    }
+    state_mod.PRODUCTS.append(item)
+    return item
 
 
-@admin_router.patch("/{product_id}", response_model=ProductDetailResponse)
+@admin_router.patch("/{product_id}")
 def admin_update_product(
     product_id: int,
-    payload: AdminProductUpdatePayload,
-    session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin"])),
-) -> ProductDetailResponse:
-    product = get_product(session, product_id)
-    if not product:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
-    if payload.name is not None:
-        names: dict[str, str] = payload.name
-        if names.get("zh-Hant"):
-            product.name_zh_hant = names["zh-Hant"]
-        if names.get("ja"):
-            product.name_ja = names["ja"]
-        if names.get("en"):
-            product.name_en = names["en"]
-    if payload.category is not None:
-        product.category = payload.category
-    if payload.price_twd is not None:
-        product.price_twd = payload.price_twd
-    if payload.grade is not None:
-        product.grade = payload.grade
-    if payload.availability is not None:
-        product.availability = payload.availability
-    if payload.tags is not None:
-        product.tags_json = json.dumps(payload.tags)
-    if payload.brand is not None:
-        product.brand = payload.brand
-    if payload.size is not None:
-        product.size = payload.size
-    if payload.listed_at is not None:
-        product.listed_at = payload.listed_at
-    if payload.description is not None:
-        desc: dict[str, str] = payload.description
-        if "zh-Hant" in desc:
-            product.description_zh = desc["zh-Hant"]
-        if "ja" in desc:
-            product.description_ja = desc["ja"]
-        if "en" in desc:
-            product.description_en = desc["en"]
-    if payload.preview_images is not None:
-        product.preview_images_json = json.dumps(payload.preview_images)
-    if payload.detail_images is not None:
-        product.detail_images_json = json.dumps(payload.detail_images)
-    if payload.stock_qty is not None:
-        product.stock_qty = payload.stock_qty
-    if payload.cost_twd is not None:
-        product.cost_twd = payload.cost_twd
-    session.commit()
-    session.refresh(product)
-    return ProductDetailResponse(**_build_product_item(product, "en").model_dump())
-
-
-@admin_router.delete("/{product_id}", status_code=200)
-def admin_delete_product(
-    product_id: int,
-    session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin"])),
+    payload: LegacyAdminProductUpdatePayload,
+    user: dict = Depends(_get_user_dict),
 ) -> dict[str, Any]:
-    product = get_product(session, product_id)
-    if not product:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="product not found")
-    session.delete(product)
+    _require_roles(user, PRODUCT_ADMIN_ROLES)
+
+    cache_item = _find_product_cache(product_id)
+    if cache_item is None:
+        raise HTTPException(status_code=404, detail="product not found")
+
+    session = SessionLocal()
+    db_product = session.get(Product, product_id)
+    if db_product is None:
+        session.close()
+        raise HTTPException(status_code=404, detail="product not found")
+
+    if payload.sku is not None:
+        cache_item["sku"] = payload.sku
+        db_product.sku = payload.sku
+    if payload.category is not None:
+        cache_item["category"] = payload.category
+        db_product.category = payload.category
+    if payload.name is not None:
+        normalized_name = _normalize_product_name(payload.name, cache_item["sku"])
+        cache_item["name"] = normalized_name
+        db_product.name_zh_hant = normalized_name["zh-Hant"]
+        db_product.name_ja = normalized_name["ja"]
+        db_product.name_en = normalized_name["en"]
+    if payload.description is not None:
+        cache_item["description"] = _normalize_product_description(
+            payload.description,
+            cache_item.get("name", {}).get("zh-Hant", cache_item["sku"]),
+        )
+    if payload.grade is not None:
+        cache_item["grade"] = payload.grade
+        db_product.grade = payload.grade
+    if payload.price_twd is not None:
+        cache_item["price_twd"] = payload.price_twd
+        db_product.price_twd = payload.price_twd
+    if payload.image_urls is not None:
+        cache_item["image_urls"] = [url.strip() for url in payload.image_urls if url.strip()]
+
     session.commit()
+    session.close()
+    return cache_item
+
+
+@admin_router.delete("/{product_id}")
+def admin_delete_product(product_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_roles(user, PRODUCT_ADMIN_ROLES)
+
+    cache_item = _find_product_cache(product_id)
+    if cache_item is None:
+        raise HTTPException(status_code=404, detail="product not found")
+
+    state_mod.PRODUCTS[:] = [
+        item
+        for item in state_mod.PRODUCTS
+        if int(item.get("id") or 0) != product_id
+    ]
+    session = SessionLocal()
+    db_product = session.get(Product, product_id)
+    if db_product is not None:
+        session.delete(db_product)
+        session.commit()
+    session.close()
     return {"ok": True}
 
 

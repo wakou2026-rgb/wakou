@@ -1,59 +1,85 @@
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+import app.core.state as state_mod
 from ...core.db import get_db_session
-from ...modules.auth.dependencies import require_role
-from .schemas import CostCreatePayload, CostItem, CostListResponse, ReportSummary, TotalsBlock
-from .service import create_cost, get_category_breakdown, get_monthly_report, get_report_summary, list_costs
+from ...core.helpers import _get_user_dict, _require_admin
+from ...core.schemas import CostRecordPayload, PointsPolicyPayload
+from .service import get_category_breakdown
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin-costs"])
+router = APIRouter(tags=["admin-costs"])
 
 
-@router.get("/costs", response_model=CostListResponse)
-def admin_list_costs(
-    session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin"])),
-) -> CostListResponse:
-    costs = list_costs(session)
-    return CostListResponse(
-        items=[CostItem.model_validate(c) for c in costs],
-        total=len(costs),
+@router.post("/api/v1/admin/costs", status_code=201)
+def admin_create_cost(payload: CostRecordPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_admin(user)
+    max_id = max([int(item.get("id") or 0) for item in state_mod.COST_RECORDS], default=0)
+    if state_mod.next_cost_id <= max_id:
+        state_mod.next_cost_id = max_id + 1
+    row = {
+        "id": state_mod.next_cost_id,
+        "title": payload.title,
+        "amount_twd": payload.amount_twd,
+        "recorded_at": payload.recorded_at,
+        "type": "cost",
+    }
+    state_mod.next_cost_id += 1
+    state_mod.COST_RECORDS.append(row)
+    return row
+
+
+@router.get("/api/v1/admin/costs")
+def admin_list_costs(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_admin(user)
+    return {
+        "items": sorted(
+            state_mod.COST_RECORDS,
+            key=lambda item: int(item.get("id") or 0),
+            reverse=True,
+        )
+    }
+
+
+@router.post("/api/v1/admin/points-policy")
+def admin_update_points_policy(
+    payload: PointsPolicyPayload,
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    _require_admin(user)
+    state_mod.POINTS_POLICY.update(
+        {
+            "point_value_twd": payload.point_value_twd,
+            "base_rate": payload.base_rate,
+            "diamond_rate": payload.diamond_rate,
+            "expiry_months": payload.expiry_months,
+        }
     )
+    return state_mod.POINTS_POLICY
 
 
-@router.post("/costs", response_model=CostItem, status_code=201)
-def admin_create_cost(
-    payload: CostCreatePayload,
-    session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin"])),
-) -> CostItem:
-    cost = create_cost(session, payload.title, payload.amount_twd, payload.recorded_at,
-                       product_id=payload.product_id, cost_type=payload.cost_type)
-    return CostItem.model_validate(cost)
+@router.get("/api/v1/admin/points-policy")
+def admin_get_points_policy(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_admin(user)
+    return state_mod.POINTS_POLICY
 
 
-@router.get("/report/summary")
-def admin_report_summary(
-    _user=Depends(require_role(["admin", "super_admin"])),
-) -> dict:
-    main_module = sys.modules.get("app.main")
-    revenue_records: list[dict] = getattr(main_module, "REVENUE_RECORDS", []) if main_module else []
-    cost_records: list[dict] = getattr(main_module, "COST_RECORDS", []) if main_module else []
-
-    revenue_sum = sum(int(item.get("amount_twd") or 0) for item in revenue_records)
-    cost_sum = sum(int(item.get("amount_twd") or 0) for item in cost_records)
+@router.get("/api/v1/admin/report/summary")
+def admin_report_summary(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_admin(user)
+    revenue_sum = sum(int(item.get("amount_twd") or 0) for item in state_mod.REVENUE_RECORDS)
+    cost_sum = sum(int(item.get("amount_twd") or 0) for item in state_mod.COST_RECORDS)
 
     date_map: dict[str, dict[str, int]] = {}
-    for item in revenue_records:
+    for item in state_mod.REVENUE_RECORDS:
         date_key = str(item.get("recorded_at") or datetime.now(timezone.utc).date().isoformat())
         date_map.setdefault(date_key, {"income": 0, "cost": 0})
         date_map[date_key]["income"] += int(item.get("amount_twd") or 0)
-    for item in cost_records:
+    for item in state_mod.COST_RECORDS:
         date_key = str(item.get("recorded_at") or datetime.now(timezone.utc).date().isoformat())
         date_map.setdefault(date_key, {"income": 0, "cost": 0})
         date_map[date_key]["cost"] += int(item.get("amount_twd") or 0)
@@ -71,52 +97,42 @@ def admin_report_summary(
             "profit_twd": revenue_sum - cost_sum,
         },
         "series": series,
-        "cost_items": sorted(cost_records, key=lambda item: int(item.get("id") or 0), reverse=True),
-        "revenue_items": sorted(revenue_records, key=lambda item: int(item.get("id") or 0), reverse=True),
+        "cost_items": sorted(state_mod.COST_RECORDS, key=lambda item: int(item.get("id") or 0), reverse=True),
+        "revenue_items": sorted(
+            state_mod.REVENUE_RECORDS,
+            key=lambda item: int(item.get("id") or 0),
+            reverse=True,
+        ),
     }
 
 
-@router.get("/report/monthly")
-def admin_monthly_report(
-    year: int = 2026,
-    _user=Depends(require_role(["admin", "super_admin"])),
-) -> dict:
-    main_module = sys.modules.get("app.main")
-    revenue_records: list[dict] = getattr(main_module, "REVENUE_RECORDS", []) if main_module else []
-    cost_records: list[dict] = getattr(main_module, "COST_RECORDS", []) if main_module else []
-
-    cost_by_month: dict[int, int] = {}
-    for item in cost_records:
-        raw = str(item.get("recorded_at") or "")
-        if len(raw) >= 7 and raw[:4] == str(year):
-            m = int(raw[5:7])
-            cost_by_month[m] = cost_by_month.get(m, 0) + int(item.get("amount_twd") or 0)
-
-    revenue_by_month: dict[int, int] = {}
-    for item in revenue_records:
-        raw = str(item.get("recorded_at") or "")
-        if len(raw) >= 7 and raw[:4] == str(year):
-            m = int(raw[5:7])
-            revenue_by_month[m] = revenue_by_month.get(m, 0) + int(item.get("amount_twd") or 0)
+@router.get("/api/v1/admin/report/monthly")
+def admin_report_monthly(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_admin(user)
+    month_map: dict[str, dict[str, int]] = {}
+    for item in state_mod.REVENUE_RECORDS:
+        raw_date = str(item.get("recorded_at") or "")
+        month_key = raw_date[:7] if len(raw_date) >= 7 else "unknown"
+        month_map.setdefault(month_key, {"income": 0, "cost": 0})
+        month_map[month_key]["income"] += int(item.get("amount_twd") or 0)
+    for item in state_mod.COST_RECORDS:
+        raw_date = str(item.get("recorded_at") or "")
+        month_key = raw_date[:7] if len(raw_date) >= 7 else "unknown"
+        month_map.setdefault(month_key, {"income": 0, "cost": 0})
+        month_map[month_key]["cost"] += int(item.get("amount_twd") or 0)
 
     months = []
-    for m in range(1, 13):
-        cost = cost_by_month.get(m, 0)
-        revenue = revenue_by_month.get(m, 0)
-        months.append({
-            "month": m,
-            "income_twd": revenue,
-            "revenue": revenue,
-            "cost": cost,
-            "cost_twd": cost,
-            "profit": revenue - cost,
-        })
-    return {"year": year, "months": months}
+    for key in sorted(month_map.keys()):
+        income = month_map[key]["income"]
+        cost = month_map[key]["cost"]
+        months.append({"month": key, "income_twd": income, "cost_twd": cost, "profit_twd": income - cost})
+    return {"months": months}
 
 
-@router.get("/report/category-breakdown")
+@router.get("/api/v1/admin/report/category-breakdown")
 def admin_category_breakdown(
     session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin"])),
-) -> dict:
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    _require_admin(user)
     return get_category_breakdown(session)

@@ -1,35 +1,42 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from ...core.db import get_db_session
-from ...modules.auth.dependencies import require_role
-from .schemas import ReviewItem, ReviewListResponse, ReviewModerationPayload
-from .service import list_reviews, moderate_review
 
-router = APIRouter(prefix="/api/v1/admin/reviews", tags=["admin-reviews"])
+from typing import Any
 
+from fastapi import APIRouter, Depends, HTTPException
 
-@router.get("", response_model=ReviewListResponse)
-def admin_list_reviews(
-    session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin", "sales"])),
-) -> ReviewListResponse:
-    reviews = list_reviews(session)
-    return ReviewListResponse(
-        items=[ReviewItem.model_validate(r) for r in reviews],
-        total=len(reviews),
-    )
+import app.core.state as state_mod
+from app.core.helpers import _get_user_dict, _require_roles
+from app.core.schemas import ReviewModerationPayload, ReviewPayload
+
+router = APIRouter(tags=["admin-reviews"])
+buyer_router = APIRouter(tags=["reviews"])
 
 
-@router.patch("/{review_id}", response_model=ReviewItem)
+@buyer_router.post("/api/v1/reviews", status_code=501)
+def create_review(payload: ReviewPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _ = user
+    raise HTTPException(status_code=501, detail="review feature not yet implemented")
+
+
+@router.get("/api/v1/admin/reviews")
+def admin_list_reviews(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
+    rows = sorted(state_mod.REVIEWS, key=lambda item: int(item.get("id") or 0), reverse=True)
+    return {"items": rows}
+
+
+@router.patch("/api/v1/admin/reviews/{review_id}")
 def admin_moderate_review(
     review_id: int,
     payload: ReviewModerationPayload,
-    session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin"])),
-) -> ReviewItem:
-    try:
-        review = moderate_review(session, review_id, payload.hidden, payload.seller_reply)
-        return ReviewItem.model_validate(review)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
+    target = next((item for item in state_mod.REVIEWS if int(item.get("id") or 0) == review_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="review not found")
+    if payload.hidden is not None:
+        target["hidden"] = payload.hidden
+    if payload.seller_reply is not None:
+        target["seller_reply"] = payload.seller_reply
+    return target

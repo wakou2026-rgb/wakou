@@ -11,12 +11,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...core.db import get_db_session
+import app.core.state as state_mod
+from ...core.helpers import _append_event, _get_user_dict, _mark_admin_reply, _mark_buyer_inquiry, _notify_ops_channels, _require_roles
+from ...core.schemas import CommRoomMessagePayload, FinalQuotePayload, TransferProofPayload
 from ...modules.auth.dependencies import require_role
 from .models import CommRoom, CommMessage, Order
 from .notification import get_config, update_config, send_notification
 from ...core.mailer import build_html_email
 
 router = APIRouter(prefix="/api/v1/admin/comm-rooms", tags=["admin-comm-rooms"])
+buyer_router = APIRouter(tags=["comm-rooms"])
 
 
 def _room_to_dict(room: CommRoom, messages: list[CommMessage], order: Order | None) -> dict[str, Any]:
@@ -103,48 +107,249 @@ def admin_update_notification_config(
 
 
 @router.get("")
-def admin_list_comm_rooms(
-    session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin", "sales"])),
-) -> dict:
-    rooms = list(session.scalars(select(CommRoom).order_by(CommRoom.id.desc())))
-    if rooms:
-        result = []
-        for room in rooms:
-            msgs = list(session.scalars(select(CommMessage).where(CommMessage.room_id == room.id)))
-            order = session.get(Order, room.order_id)
-            result.append(_room_to_dict(room, msgs, order))
-        return {"items": result, "total": len(result)}
-    # Fallback to in-memory COMM_ROOMS when DB is empty
-    try:
-        from app.core.state import COMM_ROOMS as _COMM_ROOMS
-        mem_rooms = sorted(_COMM_ROOMS.values(), key=lambda x: x["id"], reverse=True)
-        result = [_mem_room_to_dict(r) for r in mem_rooms]
-        return {"items": result, "total": len(result)}
-    except Exception:
-        return {"items": [], "total": 0}
+def admin_list_comm_rooms(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
+    _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
+    rooms = list(state_mod.COMM_ROOMS.values())
+    rooms.sort(key=lambda r: r["id"], reverse=True)
+    return {"items": rooms}
 
 
 @router.get("/{room_id}")
-def admin_get_comm_room(
+def admin_get_comm_room(room_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
+    room = state_mod.COMM_ROOMS.get(room_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="room not found")
+    order = next((o for o in state_mod.ORDERS.values() if o.get("comm_room_id") == room_id), None)
+    room_copy = dict(room)
+    if order:
+        room_copy["order_id"] = order["id"]
+        room_copy["order"] = {
+            "id": order["id"],
+            "amount_twd": order.get("amount_twd"),
+            "discount_twd": order.get("discount_twd", 0),
+            "final_price_twd": order.get("final_price_twd"),
+            "shipping_fee_twd": order.get("shipping_fee_twd", 0),
+            "final_amount_twd": order.get("final_amount_twd"),
+            "shipping_carrier": order.get("shipping_carrier"),
+            "tracking_number": order.get("tracking_number"),
+            "status": order.get("status"),
+        }
+        product = next((p for p in state_mod.PRODUCTS if p["id"] == order.get("product_id")), None)
+        if product and product.get("image_urls"):
+            room_copy["product_image_url"] = product["image_urls"][0]
+    return room_copy
+
+
+@buyer_router.get("/api/v1/comm-rooms/me")
+def my_comm_rooms(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
+    rooms = [
+        room
+        for room in state_mod.COMM_ROOMS.values()
+        if room["buyer_email"] == user["email"] or user["role"] in state_mod.ORDER_ADMIN_ROLES
+    ]
+    rooms.sort(key=lambda room: room["id"], reverse=True)
+    return {"items": rooms}
+
+
+@buyer_router.get("/api/v1/comm-rooms/{room_id}")
+def get_comm_room(room_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    room = state_mod.COMM_ROOMS.get(room_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="room not found")
+    if room["buyer_email"] != user["email"] and user["role"] not in state_mod.ORDER_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    order = next((o for o in state_mod.ORDERS.values() if o.get("comm_room_id") == room_id), None)
+    room_copy = dict(room)
+    if order:
+        room_copy["order_id"] = order["id"]
+        room_copy["order"] = order
+        product = next((p for p in state_mod.PRODUCTS if p["id"] == order["product_id"]), None)
+        if product and product.get("image_urls") and len(product["image_urls"]) > 0:
+            room_copy["product_image_url"] = product["image_urls"][0]
+    return room_copy
+
+
+@buyer_router.post("/api/v1/comm-rooms/{room_id}/messages")
+def send_comm_room_message(
     room_id: int,
-    session: Session = Depends(get_db_session),
-    _user=Depends(require_role(["admin", "super_admin", "sales"])),
-) -> dict:
-    room = session.get(CommRoom, room_id)
-    if room:
-        msgs = list(session.scalars(select(CommMessage).where(CommMessage.room_id == room_id)))
-        order = session.get(Order, room.order_id)
-        return _room_to_dict(room, msgs, order)
-    # Fallback to in-memory
-    try:
-        from app.core.state import COMM_ROOMS as _COMM_ROOMS
-        mem_room = _COMM_ROOMS.get(room_id)
-        if mem_room:
-            return _mem_room_to_dict(mem_room)
-    except Exception:
-        pass
-    raise HTTPException(status_code=404, detail="comm room not found")
+    payload: CommRoomMessagePayload,
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    room = state_mod.COMM_ROOMS.get(room_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="room not found")
+    if room["buyer_email"] != user["email"] and user["role"] not in state_mod.ORDER_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    sender_type = "admin" if user["role"] in state_mod.ORDER_ADMIN_ROLES else "buyer"
+    msg = {
+        "id": len(room.get("messages", [])) + 1,
+        "from": sender_type,
+        "message": payload.message,
+        "image_url": payload.image_url,
+        "offer_price_twd": payload.offer_price_twd,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    room.setdefault("messages", []).append(msg)
+    if sender_type == "buyer":
+        _mark_buyer_inquiry(room_id, room, payload.message)
+    else:
+        _mark_admin_reply(room)
+    _append_event(
+        "comm.message",
+        user["email"],
+        user["role"],
+        room_id=room_id,
+        title="新增對話訊息",
+        detail=payload.message[:80] if payload.message else "傳送圖片訊息",
+        payload={
+            "buyer_email": room["buyer_email"],
+            "has_image": bool(payload.image_url),
+            "has_offer": payload.offer_price_twd is not None,
+        },
+    )
+    return msg
+
+
+@buyer_router.post("/api/v1/comm-rooms/{room_id}/final-quote")
+def set_final_quote(
+    room_id: int,
+    payload: FinalQuotePayload,
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
+    room = state_mod.COMM_ROOMS.get(room_id)
+    if room is None:
+        raise HTTPException(status_code=404, detail="room not found")
+    order = next((o for o in state_mod.ORDERS.values() if o.get("comm_room_id") == room_id), None)
+    if not order:
+        raise HTTPException(status_code=404, detail="order not found")
+
+    order["final_price_twd"] = payload.final_price_twd
+    order["shipping_fee_twd"] = payload.shipping_fee_twd
+    order["discount_twd"] = payload.discount_twd
+    order["final_amount_twd"] = payload.final_price_twd + payload.shipping_fee_twd - (payload.discount_twd or 0)
+    if payload.shipping_carrier is not None:
+        order["shipping_carrier"] = payload.shipping_carrier
+    if payload.tracking_number is not None:
+        order["tracking_number"] = payload.tracking_number
+    order["status"] = "quoted"
+
+    room.setdefault("messages", []).append(
+        {
+            "id": len(room["messages"]) + 1,
+            "from": "system",
+            "message": f"管理員已更新報價：商品 NT${payload.final_price_twd} / 運費 NT${payload.shipping_fee_twd} / 折扣 NT${payload.discount_twd or 0}",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _mark_admin_reply(room)
+    _append_event(
+        "order.quoted",
+        user["email"],
+        user["role"],
+        order_id=order["id"],
+        room_id=room_id,
+        title="完成報價",
+        detail="管理員更新商品、運費與折扣",
+        payload={"buyer_email": room["buyer_email"], "final_amount_twd": order["final_amount_twd"]},
+    )
+    return {"ok": True, "status": "quote_sent"}
+
+
+@buyer_router.post("/api/v1/comm-rooms/{room_id}/accept-quote")
+def accept_quote(room_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+    room = state_mod.COMM_ROOMS.get(room_id)
+    if room is None or room["buyer_email"] != user["email"]:
+        raise HTTPException(status_code=404, detail="room not found")
+    order = next((o for o in state_mod.ORDERS.values() if o.get("comm_room_id") == room_id), None)
+    if not order or order["status"] != "quoted":
+        raise HTTPException(status_code=400, detail="invalid order state")
+
+    order["status"] = "buyer_accepted"
+    room.setdefault("messages", []).append(
+        {
+            "id": len(room["messages"]) + 1,
+            "from": "system",
+            "message": "買家已接受報價",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _append_event(
+        "order.quote_accepted",
+        user["email"],
+        user["role"],
+        order_id=order["id"],
+        room_id=room_id,
+        title="買家同意報價",
+        detail="進入匯款等待階段",
+        payload={"buyer_email": room["buyer_email"]},
+    )
+    return {"ok": True}
+
+
+@buyer_router.post("/api/v1/comm-rooms/{room_id}/upload-proof")
+def upload_proof(
+    room_id: int,
+    payload: TransferProofPayload,
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    room = state_mod.COMM_ROOMS.get(room_id)
+    if room is None or room["buyer_email"] != user["email"]:
+        raise HTTPException(status_code=404, detail="room not found")
+    order = next((o for o in state_mod.ORDERS.values() if o.get("comm_room_id") == room_id), None)
+    if not order or order["status"] not in ["buyer_accepted", "proof_uploaded"]:
+        raise HTTPException(status_code=400, detail="invalid order state")
+
+    order["transfer_proof_url"] = payload.transfer_proof_url
+    order["status"] = "proof_uploaded"
+    room.setdefault("messages", []).append(
+        {
+            "id": len(room["messages"]) + 1,
+            "from": "system",
+            "message": "買家已上傳匯款證明",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    _append_event(
+        "payment.proof_uploaded",
+        user["email"],
+        user["role"],
+        order_id=order["id"],
+        room_id=room_id,
+        title="上傳匯款證明",
+        detail="買家已提供匯款存證，待管理員確認",
+        payload={"buyer_email": room["buyer_email"], "transfer_proof_url": payload.transfer_proof_url},
+    )
+    content = "買家已提供匯款存證，待管理員確認"
+    fields = {
+        "買家": room["buyer_email"],
+        "諮詢室": f"#{room_id}",
+        "證明網址": payload.transfer_proof_url,
+    }
+    admin_link = f"{state_mod.ADMIN_BASE_URL}/commrooms/index?room={room_id}"
+
+    html = build_html_email(
+        subject=f"[Wakou] 匯款證明上傳 Order #{order['id']}",
+        preheader="Payment Proof Uploaded",
+        content=content,
+        fields=fields,
+        actions=[{"label": "前往後台處理", "url": admin_link}],
+    )
+
+    _notify_ops_channels(
+        subject=f"[Wakou] 匯款證明上傳 Order #{order['id']}",
+        body=(
+            f"買家: {room['buyer_email']}\n"
+            f"諮詢室: #{room_id}\n"
+            f"證明網址: {payload.transfer_proof_url}\n"
+            f"後台快速處理: {admin_link}"
+        ),
+        html_body=html,
+    )
+    return {"ok": True}
 
 
 @router.post("/{room_id}/messages", status_code=201)

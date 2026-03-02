@@ -11,7 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...core.config import ACCESS_TOKEN_EXPIRE_MINUTES
-from ...core.db import get_db_session
+from ...core.db import SessionLocal, get_db_session
+import app.core.state as state_mod
+from ...core.helpers import _get_user_dict
 from .dependencies import get_current_user, require_role
 from .models import User
 from .schemas import (
@@ -90,24 +92,35 @@ class _PureAdminRefreshRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-@auth_router.post("/register", status_code=status.HTTP_201_CREATED)
-@limiter.limit("5/minute")
-def register(request: Request, payload: RegisterRequest, session: Session = Depends(get_db_session)) -> None:
-    verify_register_verification_code(payload.email, payload.verification_code)
-    register_user(session=session, email=payload.email, password=payload.password, role=payload.role)
+@auth_router.post("/register", status_code=201)
+def register(payload: RegisterRequest) -> dict[str, str]:
+    session = SessionLocal()
+    try:
+        verify_register_verification_code(payload.email, payload.verification_code)
+        user = register_user(session, payload.email, payload.password, payload.role)
+        if user.email not in state_mod.USER_DISPLAY_NAMES:
+            state_mod.USER_DISPLAY_NAMES[user.email] = user.email.split("@", 1)[0]
+        return {"email": user.email, "role": user.role}
+    finally:
+        session.close()
 
 
-@auth_router.post("/register/request-code", status_code=status.HTTP_200_OK)
-@limiter.limit("5/minute")
-def request_register_code(request: Request, payload: RegisterCodeRequest) -> dict[str, Any]:
-    return send_register_verification_code(str(payload.email))
+@auth_router.post("/register/request-code")
+def request_register_code(payload: dict[str, str]) -> dict[str, Any]:
+    email = str(payload.get("email", "")).strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
+    return send_register_verification_code(email)
 
 
-@auth_router.post("/login", response_model=TokenResponse)
-@limiter.limit("5/minute")
-def login(request: Request, payload: LoginRequest, session: Session = Depends(get_db_session)) -> TokenResponse:
-    access_token, refresh_token = login_user(session=session, email=payload.email, password=payload.password)
-    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+@auth_router.post("/login")
+def login(payload: LoginRequest) -> dict[str, str]:
+    session = SessionLocal()
+    try:
+        access_token, refresh_token = login_user(session, payload.email, payload.password)
+        return {"access_token": access_token, "refresh_token": refresh_token}
+    finally:
+        session.close()
 
 
 @auth_router.post("/forgot-password", status_code=status.HTTP_200_OK)
@@ -148,16 +161,19 @@ def change_password_for_current_user(
     return {"ok": True}
 
 
-@auth_router.post("/refresh", response_model=AccessTokenResponse)
-def refresh(payload: RefreshRequest, session: Session = Depends(get_db_session)) -> AccessTokenResponse:
-    access_token = refresh_access_token(session=session, refresh_token=payload.refresh_token)
-    return AccessTokenResponse(access_token=access_token)
+@auth_router.post("/refresh")
+def refresh(payload: RefreshRequest) -> dict[str, str]:
+    session = SessionLocal()
+    try:
+        access_token = refresh_access_token(session, payload.refresh_token)
+        return {"access_token": access_token}
+    finally:
+        session.close()
 
 
-@auth_router.get("/me", response_model=MeResponse)
-def me(current_user: User = Depends(get_current_user)) -> MeResponse:
-    display_name = current_user.email.split("@", 1)[0]
-    return MeResponse(email=current_user.email, role=cast(RoleLiteral, current_user.role), display_name=display_name)
+@auth_router.get("/me")
+def me(user: dict = Depends(_get_user_dict)) -> dict[str, str]:
+    return {"email": user["email"], "role": user["role"], "display_name": user["display_name"]}
 
 
 # ---------------------------------------------------------------------------
