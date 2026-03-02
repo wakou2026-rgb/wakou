@@ -1,9 +1,11 @@
 import { http } from "@/utils/http";
 
 export type User = {
+  id: number;
   email: string;
   role: string;
   display_name: string;
+  is_banned: boolean;
 };
 
 export type BuyerHistory = {
@@ -25,6 +27,14 @@ export const addBuyerNote = (email: string, note: string) => {
 
 export const awardBuyerPoints = (email: string, points: number) => {
   return http.request("post", `/api/v1/admin/crm/buyers/${email}/reward`, { data: { points } });
+};
+
+export const banUser = (userId: number, banned: boolean) => {
+  return http.request("patch", `/api/v1/admin/users/${userId}/ban`, { data: { banned } });
+};
+
+export const changeUserRole = (userId: number, role: string) => {
+  return http.request("patch", `/api/v1/admin/users/${userId}/role`, { data: { role } });
 };
 
 

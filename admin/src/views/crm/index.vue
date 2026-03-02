@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
-import { getUsers, getBuyerHistory, addBuyerNote, awardBuyerPoints, getCommRoom, postCommMessageRich, setCommRoomStatus, setFinalQuote, type User, type BuyerHistory } from "@/api/crm";
+import { getUsers, getBuyerHistory, addBuyerNote, awardBuyerPoints, banUser, changeUserRole, getCommRoom, postCommMessageRich, setCommRoomStatus, setFinalQuote, type User, type BuyerHistory } from "@/api/crm";
 import { ElMessage } from "element-plus";
 
 defineOptions({
@@ -16,6 +16,7 @@ const buyerHistory = ref<BuyerHistory>({ orders: [], notes: [] });
 
 const noteText = ref("");
 const rewardPoints = ref(0);
+const roleOptions = ["buyer", "admin", "sales", "maintenance"];
 
 const chatLoading = ref(false);
 
@@ -204,6 +205,43 @@ const handleAwardPoints = async () => {
   }
 };
 
+const getRoleTagType = (role: string) => {
+  if (role === "admin" || role === "super_admin") return "danger";
+  if (role === "sales") return "warning";
+  if (role === "maintenance") return "info";
+  return "success";
+};
+
+const handleRoleChange = async (user: User, role: string | number | boolean) => {
+  const targetRole = String(role);
+  const previousRole = user.role;
+  user.role = targetRole;
+  try {
+    const response = await changeUserRole(user.id, targetRole);
+    const nextRole = (response as any)?.role || (response as any)?.data?.role || targetRole;
+    user.role = nextRole;
+    ElMessage.success("角色更新成功");
+  } catch (error: any) {
+    user.role = previousRole;
+    ElMessage.error(error?.message || "角色更新失敗");
+  }
+};
+
+const handleBanChange = async (user: User, banned: string | number | boolean) => {
+  const targetBanned = Boolean(banned);
+  const previous = user.is_banned;
+  user.is_banned = targetBanned;
+  try {
+    const response = await banUser(user.id, targetBanned);
+    const nextBanned = (response as any)?.is_banned ?? (response as any)?.data?.is_banned;
+    user.is_banned = typeof nextBanned === "boolean" ? nextBanned : targetBanned;
+    ElMessage.success(user.is_banned ? "已封鎖會員" : "已解除封鎖");
+  } catch (error: any) {
+    user.is_banned = previous;
+    ElMessage.error(error?.message || "封鎖狀態更新失敗");
+  }
+};
+
 onMounted(() => {
   loadData();
   chatRefreshTimer = setInterval(() => {
@@ -234,9 +272,42 @@ onUnmounted(() => {
           >
             <el-table-column prop="email" label="信箱" />
             <el-table-column prop="display_name" label="顯示名稱" />
-            <el-table-column prop="role" label="角色" width="100">
+            <el-table-column prop="role" label="角色" width="220">
               <template #default="{ row }">
-                <el-tag size="small">{{ row.role }}</el-tag>
+                <div class="flex flex-col gap-2">
+                  <el-tag size="small" :type="getRoleTagType(row.role)">{{ row.role }}</el-tag>
+                  <el-select
+                    v-model="row.role"
+                    size="small"
+                    @change="value => handleRoleChange(row, value)"
+                    :disabled="row.role === 'super_admin'"
+                  >
+                    <el-option
+                      v-if="row.role === 'super_admin'"
+                      label="super_admin"
+                      value="super_admin"
+                    />
+                    <el-option
+                      v-for="option in roleOptions"
+                      :key="option"
+                      :label="option"
+                      :value="option"
+                    />
+                  </el-select>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="is_banned" label="封鎖" width="140" align="center">
+              <template #default="{ row }">
+                <div class="flex flex-col items-center gap-2">
+                  <el-tag size="small" :type="row.is_banned ? 'danger' : 'success'">
+                    {{ row.is_banned ? "已封鎖" : "正常" }}
+                  </el-tag>
+                  <el-switch
+                    v-model="row.is_banned"
+                    @change="value => handleBanChange(row, value)"
+                  />
+                </div>
               </template>
             </el-table-column>
           </el-table>

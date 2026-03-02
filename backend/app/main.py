@@ -350,6 +350,7 @@ COMM_ROOMS: dict[int, dict[str, Any]] = {
         "created_at": "2026-02-23T10:00:00Z"
     }
 }
+WISHLISTS: dict[str, list[str]] = {}
 USER_DISPLAY_NAMES: dict[str, str] = {}
 EVENT_LOGS: list[dict[str, Any]] = []
 USER_NOTIFICATION_CURSOR: dict[str, int] = {}
@@ -365,6 +366,9 @@ next_order_id = 1
 next_room_id = 1
 next_product_id = 1
 next_mag_article_id = 1
+
+from app.modules.wishlist.router import wishlist_router
+app.include_router(wishlist_router)
 
 FULL_ADMIN_ROLES = {"admin", "super_admin"}
 PRODUCT_ADMIN_ROLES = {"admin", "super_admin", "maintenance"}
@@ -993,6 +997,7 @@ def reset_state() -> None:
         session.close()
     ORDERS.clear()
     COMM_ROOMS.clear()
+    WISHLISTS.clear()
     USER_DISPLAY_NAMES.clear()
     PRODUCTS.clear()
     CATEGORIES.clear()

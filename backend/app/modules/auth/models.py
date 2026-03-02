@@ -1,4 +1,4 @@
-from sqlalchemy import String
+from sqlalchemy import Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ...core.db import Base
@@ -12,3 +12,4 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="buyer")
     display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    is_banned: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")

@@ -7,6 +7,7 @@ import { useAuthStore } from "../../modules/auth/store";
 import { fetchPrivateSalon, markNotificationsRead, fetchMyCoupons, fetchGachaStatus, performGachaDraw, submitOrderReview, fetchOrderReview } from "../../modules/account/service";
 import { deriveMembershipSnapshot, shouldClearUnreadOnRoute } from "../../modules/account/membership";
 import { hasCouponReward, shouldForceLogin } from "../../modules/account/gacha-view-state";
+import { getWishlistProducts, removeFromWishlist } from "../../modules/wishlist/service";
 
 // ─── Shipment tracking (integrated from WarehouseView) ───────────────────────
 const shipmentLoading = ref(false);
@@ -174,18 +175,23 @@ const sectionMeta = computed(() => ({
     title: t("account.section_points"),
     subtitle: t("account.section_points_sub"),
   },
+  wishlist: {
+    title: t("wishlist.title"),
+    subtitle: t("wishlist.title"),
+  },
 }));
 
 const section = computed(() => String(route.params.section || "timeline"));
 const meta = computed(() => sectionMeta.value[section.value] || sectionMeta.value.timeline);
 const navItems = computed(() => [
-  { key: "timeline", label: t("account.section_timeline"), en: t("account.section_timeline_sub") },
-  { key: "rooms", label: t("account.section_rooms"), en: t("account.section_rooms_sub") },
-  { key: "orders", label: t("account.section_orders"), en: t("account.section_orders_sub") },
-  { key: "messages", label: t("account.section_messages"), en: t("account.section_messages_sub") },
-  { key: "coupons", label: t("account.section_coupons"), en: t("account.section_coupons_sub") },
-  { key: "gacha", label: t("account.section_gacha"), en: t("account.section_gacha_sub") },
-  { key: "points", label: t("account.section_points"), en: t("account.section_points_sub") },
+  { key: "timeline", icon: "◌", label: t("account.section_timeline"), en: t("account.section_timeline_sub") },
+  { key: "rooms", icon: "◍", label: t("account.section_rooms"), en: t("account.section_rooms_sub") },
+  { key: "orders", icon: "◐", label: t("account.section_orders"), en: t("account.section_orders_sub") },
+  { key: "messages", icon: "◉", label: t("account.section_messages"), en: t("account.section_messages_sub") },
+  { key: "coupons", icon: "◇", label: t("account.section_coupons"), en: t("account.section_coupons_sub") },
+  { key: "gacha", icon: "✦", label: t("account.section_gacha"), en: t("account.section_gacha_sub") },
+  { key: "points", icon: "◎", label: t("account.section_points"), en: t("account.section_points_sub") },
+  { key: "wishlist", icon: "♥", label: t("wishlist.title"), en: t("wishlist.title") },
 
 ]);
 
@@ -204,6 +210,7 @@ const membershipSnapshot = computed(() => deriveMembershipSnapshot({
 }));
 
 const coupons = ref([]);
+const wishlistProducts = ref([]);
 const gachaStatus = ref({ draws_available: 0, pool: null });
 const gachaResults = ref([]);
 const isDrawing = ref(false);
@@ -268,6 +275,33 @@ function formatDate(value) {
 
 function formatCurrency(value) {
   return `NT$ ${Number(value || 0).toLocaleString()}`;
+}
+
+function localizeWishlistName(item) {
+  const lang = locale.value || "zh-Hant";
+  const rawName = item?.name;
+  if (rawName && typeof rawName === "object") {
+    return rawName[lang] || rawName["zh-Hant"] || rawName.en || Object.values(rawName)[0] || "";
+  }
+  if (typeof rawName === "string") {
+    return rawName;
+  }
+  return item?.name_zh || item?.name_ja || item?.name_en || "";
+}
+
+function wishlistImage(item) {
+  if (Array.isArray(item?.image_urls) && item.image_urls.length > 0) {
+    return item.image_urls[0];
+  }
+  if (Array.isArray(item?.imageUrls) && item.imageUrls.length > 0) {
+    return item.imageUrls[0];
+  }
+  return "/logo-transparent.png";
+}
+
+async function removeWishlistProduct(productId) {
+  await removeFromWishlist(String(productId));
+  wishlistProducts.value = wishlistProducts.value.filter((item) => String(item.id) !== String(productId));
 }
 
 function openRoom(roomId) {
@@ -411,6 +445,10 @@ async function loadSection() {
       gachaStatus.value = status;
       if (salonFailed) errorText.value = "";
     }
+    if (section.value === "wishlist") {
+      wishlistProducts.value = await getWishlistProducts();
+      if (salonFailed) errorText.value = "";
+    }
   } catch (err) {
     if (err instanceof Error && err.message.includes("(401)")) {
       authStore.logout();
@@ -489,14 +527,14 @@ watch(
             :class="item.key === section ? 'active' : ''"
             @click="gotoSection(item.key)"
           >
-            <span>{{ item.label }}</span>
+            <span class="side-link-top"><span class="nav-icon">{{ item.icon }}</span>{{ item.label }}</span>
             <small>{{ item.en }}</small>
           </button>
         </nav>
       </aside>
 
       <section class="main">
-        <p v-if="sectionItems.length === 0 && section !== 'coupons' && section !== 'gacha' && section !== 'timeline'" class="state">{{ $t('account.no_data') }}</p>
+        <p v-if="sectionItems.length === 0 && section !== 'coupons' && section !== 'gacha' && section !== 'timeline' && section !== 'wishlist'" class="state">{{ $t('account.no_data') }}</p>
 
         <!-- Orders: simplified card layout with image + order info -->
         <section v-else-if="section === 'orders'" class="order-list">
@@ -749,6 +787,22 @@ watch(
           </div>
         </section>
 
+        <section v-else-if="section === 'wishlist'" class="wishlist-list">
+          <p v-if="wishlistProducts.length === 0" class="state">{{ $t('wishlist.empty') }}</p>
+          <article v-for="item in wishlistProducts" :key="item.id" class="wishlist-card">
+            <div class="wishlist-thumb">
+              <img :src="wishlistImage(item)" :alt="localizeWishlistName(item)" />
+            </div>
+            <div class="wishlist-info">
+              <p class="wishlist-name">{{ localizeWishlistName(item) }}</p>
+              <p class="wishlist-price">{{ formatCurrency(item.price_twd || item.priceTwd) }}</p>
+              <button type="button" class="wishlist-remove-btn" @click="removeWishlistProduct(item.id)">
+                {{ $t('wishlist.remove') }}
+              </button>
+            </div>
+          </article>
+        </section>
+
         <!-- Default list for rooms -->
         <section v-else class="list">
           <article
@@ -985,6 +1039,19 @@ watch(
   padding: 0.65rem 0.7rem;
   text-align: left;
   width: 100%;
+}
+
+.side-link-top {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+}
+
+.nav-icon {
+  color: #7c6549;
+  font-size: 0.86rem;
+  min-width: 0.9rem;
+  text-align: center;
 }
 
 .side-link:last-child {
@@ -1301,6 +1368,55 @@ watch(
   color: #7a8a9e;
   font-size: 0.78rem;
   margin: 0.2rem 0 0;
+}
+
+.wishlist-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.wishlist-card {
+  align-items: center;
+  border: 1px solid #d4d9df;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 72px 1fr;
+  padding: 0.85rem;
+}
+
+.wishlist-thumb {
+  aspect-ratio: 1;
+  background: #f0ede8;
+  overflow: hidden;
+  width: 72px;
+}
+
+.wishlist-thumb img {
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.wishlist-name {
+  color: #182a47;
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.wishlist-price {
+  color: #324867;
+  font-size: 0.82rem;
+  margin: 0.2rem 0 0;
+}
+
+.wishlist-remove-btn {
+  background: transparent;
+  border: 1px solid rgba(190, 31, 53, 0.45);
+  color: #9f1f34;
+  cursor: pointer;
+  font-size: 0.76rem;
+  margin-top: 0.45rem;
+  padding: 0.25rem 0.55rem;
 }
 
 /* Gacha section */

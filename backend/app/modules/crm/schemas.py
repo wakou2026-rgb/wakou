@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -32,6 +33,14 @@ class CrmNoteCreatePayload(BaseModel):
 class CrmRewardPayload(BaseModel):
     points: int
     reason: str | None = None
+
+
+class UserBanPayload(BaseModel):
+    banned: bool
+
+
+class UserRoleChangePayload(BaseModel):
+    role: Literal["buyer", "admin", "sales", "maintenance"]
 
 
 class BuyerHistoryResponse(BaseModel):

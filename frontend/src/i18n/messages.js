@@ -185,6 +185,13 @@ export const messages = {
       review_error: "評價提交失敗，請稍後再試",
       review_already: "您已對此訂單留下評價"
     },
+    wishlist: {
+      title: "收藏清單",
+      empty: "尚未收藏任何商品",
+      remove: "取消收藏",
+      added: "已加入收藏",
+      removed: "已取消收藏"
+    },
     cart: {
       empty: "您的收藏清單目前為空。",
       return_gallery: "返回藝廊",
@@ -388,7 +395,28 @@ export const messages = {
       resend_countdown: "重新發送 ({seconds}s)",
       account_type: "帳號類型",
       role_buyer: "鑑賞家（買家）",
-      role_admin: "職人（管理員）"
+      role_admin: "職人（管理員）",
+      forgot_title: "重設密碼",
+      forgot_eyebrow: "Password Recovery",
+      forgot_submit: "發送重設連結",
+      forgot_success: "重設連結已發送至您的信箱",
+      forgot_back_login: "返回登入",
+      reset_title: "設定新密碼",
+      reset_eyebrow: "Reset Password",
+      reset_new_password: "新密碼",
+      reset_confirm_password: "確認新密碼",
+      reset_submit: "確認重設",
+      reset_success: "密碼重設成功，正在跳轉...",
+      reset_password_mismatch: "兩次輸入的密碼不一致",
+      reset_password_too_short: "密碼長度至少需 8 個字元",
+      change_title: "更改密碼",
+      change_eyebrow: "Change Password",
+      change_old_password: "目前密碼",
+      change_new_password: "新密碼",
+      change_confirm_password: "確認新密碼",
+      change_submit: "確認更改",
+      change_success: "密碼更改成功",
+      change_back_dashboard: "返回儀表板"
     }
   },
   ja: {
@@ -562,6 +590,13 @@ export const messages = {
       section_shipment: "配送追跡",
       section_shipment_sub: "Shipment tracking",
       view_shipment: "配送を確認"
+    },
+    wishlist: {
+      title: "お気に入り",
+      empty: "お気に入りはまだありません",
+      remove: "お気に入りを解除",
+      added: "お気に入りに追加しました",
+      removed: "お気に入りを解除しました"
     },
     cart: {
       empty: "コレクションリストは現在空です。",
@@ -766,7 +801,28 @@ export const messages = {
       resend_countdown: "再送信 ({seconds}s)",
       account_type: "アカウント種別",
       role_buyer: "コレクター（バイヤー）",
-      role_admin: "アルチザン（管理者）"
+      role_admin: "アルチザン（管理者）",
+      forgot_title: "パスワード再設定",
+      forgot_eyebrow: "Password Recovery",
+      forgot_submit: "リセットリンクを送信",
+      forgot_success: "リセットリンクをメールで送信しました",
+      forgot_back_login: "ログインに戻る",
+      reset_title: "新しいパスワードを設定",
+      reset_eyebrow: "Reset Password",
+      reset_new_password: "新しいパスワード",
+      reset_confirm_password: "新しいパスワード（確認）",
+      reset_submit: "再設定を確認",
+      reset_success: "パスワードを再設定しました。リダイレクト中...",
+      reset_password_mismatch: "パスワードが一致しません",
+      reset_password_too_short: "パスワードは8文字以上である必要があります",
+      change_title: "パスワード変更",
+      change_eyebrow: "Change Password",
+      change_old_password: "現在のパスワード",
+      change_new_password: "新しいパスワード",
+      change_confirm_password: "新しいパスワード（確認）",
+      change_submit: "変更を確認",
+      change_success: "パスワードを変更しました",
+      change_back_dashboard: "マイページに戻る"
     }
   },
   en: {
@@ -940,6 +996,13 @@ export const messages = {
       section_shipment: "Shipment Tracking",
       section_shipment_sub: "Shipment tracking",
       view_shipment: "View Shipment"
+    },
+    wishlist: {
+      title: "Wishlist",
+      empty: "No items in your wishlist",
+      remove: "Remove",
+      added: "Added to wishlist",
+      removed: "Removed from wishlist"
     },
     cart: {
       empty: "Your collection list is currently empty.",
@@ -1144,7 +1207,28 @@ export const messages = {
       resend_countdown: "Resend ({seconds}s)",
       account_type: "Account Type",
       role_buyer: "Collector (Buyer)",
-      role_admin: "Artisan (Admin)"
+      role_admin: "Artisan (Admin)",
+      forgot_title: "Reset Password",
+      forgot_eyebrow: "Password Recovery",
+      forgot_submit: "Send Reset Link",
+      forgot_success: "Reset link sent to your email",
+      forgot_back_login: "Back to login",
+      reset_title: "Set New Password",
+      reset_eyebrow: "Reset Password",
+      reset_new_password: "New Password",
+      reset_confirm_password: "Confirm New Password",
+      reset_submit: "Confirm Reset",
+      reset_success: "Password reset successful. Redirecting...",
+      reset_password_mismatch: "Passwords do not match",
+      reset_password_too_short: "Password must be at least 8 characters",
+      change_title: "Change Password",
+      change_eyebrow: "Change Password",
+      change_old_password: "Current Password",
+      change_new_password: "New Password",
+      change_confirm_password: "Confirm New Password",
+      change_submit: "Confirm Change",
+      change_success: "Password changed successfully",
+      change_back_dashboard: "Back to dashboard"
     }
   }
 };

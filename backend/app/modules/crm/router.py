@@ -8,17 +8,17 @@ from ...core.db import get_db_session
 from ...modules.auth.dependencies import require_role
 from ...modules.auth.models import User
 from .schemas import (
-    BuyerHistoryResponse,
     BuyerNoteItem,
     CrmNoteCreatePayload,
     CrmRewardPayload,
     PointsPolicyItem,
     PointsPolicyUpdatePayload,
+    UserBanPayload,
+    UserRoleChangePayload,
 )
 from .service import (
     add_buyer_note,
     add_points,
-    get_buyer_notes,
     get_points_balance,
     get_points_policy,
     update_points_policy,
@@ -36,14 +36,52 @@ def admin_list_users(
     return {
         "items": [
             {
+                "id": u.id,
                 "email": u.email,
                 "display_name": u.display_name,
                 "role": u.role,
+                "is_banned": bool(getattr(u, "is_banned", False)),
             }
             for u in users
         ],
         "total": len(users),
     }
+
+
+@router.patch("/users/{user_id}/ban")
+def admin_set_user_ban_status(
+    user_id: int,
+    payload: UserBanPayload,
+    session: Session = Depends(get_db_session),
+    _user=Depends(require_role(["admin", "super_admin"])),
+) -> dict:
+    user = session.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    user.is_banned = payload.banned
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return {"ok": True, "is_banned": bool(user.is_banned)}
+
+
+@router.patch("/users/{user_id}/role")
+def admin_set_user_role(
+    user_id: int,
+    payload: UserRoleChangePayload,
+    session: Session = Depends(get_db_session),
+    _user=Depends(require_role(["super_admin"])),
+) -> dict:
+    user = session.scalar(select(User).where(User.id == user_id))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    user.role = payload.role
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return {"ok": True, "role": user.role}
 
 
 

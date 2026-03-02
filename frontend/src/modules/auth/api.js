@@ -61,3 +61,44 @@ export async function loginRequest(payload) {
     display_name: meData.display_name
   };
 }
+export async function forgotPasswordRequest(payload) {
+  const response = await fetch("/api/v1/auth/forgot-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(data, "forgot password failed"));
+  }
+  return data;
+}
+
+export async function resetPasswordRequest(payload) {
+  const response = await fetch("/api/v1/auth/reset-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(data, "reset password failed"));
+  }
+  return data;
+}
+
+export async function changePasswordRequest(payload, token) {
+  const response = await fetch("/api/v1/auth/change-password", {
+    method: "POST",
+    headers: { 
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(data, "change password failed"));
+  }
+  return data;
+}

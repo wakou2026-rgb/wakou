@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRoute, useRouter } from "vue-router";
 import { browseCatalog } from "../../modules/catalog/service";
+import { addToWishlist, getWishlist, removeFromWishlist } from "../../modules/wishlist/service";
 const route = useRoute();
 const router = useRouter();
 
@@ -18,6 +19,8 @@ const sortValue = ref("");
 const page = ref(1);
 const totalPages = ref(0);
 const pageSize = 20;
+const isLoggedIn = ref(false);
+const wishlistIds = ref(new Set());
 
 const swatchPalette = ["#1d1d1d", "#3a3f52", "#754f34", "#5f6a58"];
 let searchDebounceTimer;
@@ -92,6 +95,47 @@ function goDetail(id) {
   router.push(`/catalog/${id}`);
 }
 
+function checkLogin() {
+  if (typeof window === "undefined") {
+    isLoggedIn.value = false;
+    return;
+  }
+  isLoggedIn.value = Boolean(window.localStorage.getItem("wakou_access_token") || "");
+}
+
+async function loadWishlistIds() {
+  if (!isLoggedIn.value) {
+    wishlistIds.value = new Set();
+    return;
+  }
+  try {
+    const ids = await getWishlist();
+    wishlistIds.value = new Set(ids.map((value) => String(value)));
+  } catch {
+    wishlistIds.value = new Set();
+  }
+}
+
+function isWishlisted(productId) {
+  return wishlistIds.value.has(String(productId));
+}
+
+async function toggleWishlist(productId, event) {
+  event.stopPropagation();
+  const normalizedId = String(productId);
+  if (isWishlisted(normalizedId)) {
+    await removeFromWishlist(normalizedId);
+    const next = new Set(wishlistIds.value);
+    next.delete(normalizedId);
+    wishlistIds.value = next;
+    return;
+  }
+  await addToWishlist(normalizedId);
+  const next = new Set(wishlistIds.value);
+  next.add(normalizedId);
+  wishlistIds.value = next;
+}
+
 function goPrevPage() {
   if (page.value <= 1) {
     return;
@@ -108,7 +152,10 @@ function goNextPage() {
   loadCatalog();
 }
 
-onMounted(loadCatalog);
+onMounted(async () => {
+  checkLogin();
+  await Promise.all([loadCatalog(), loadWishlistIds()]);
+});
 function localizeField(val, lang) {
   const l = lang || locale.value || "zh-Hant";
   if (!val) return "";
@@ -176,6 +223,16 @@ function localizeField(val, lang) {
 
         <div class="card-copy">
           <p class="card-kicker">{{ localizeField(item.category) || localizeField(currentCategory) }}</p>
+          <button
+            v-if="isLoggedIn"
+            type="button"
+            class="wishlist-btn"
+            :class="isWishlisted(item.id) ? 'active' : ''"
+            :aria-label="isWishlisted(item.id) ? t('wishlist.removed') : t('wishlist.added')"
+            @click="toggleWishlist(item.id, $event)"
+          >
+            {{ isWishlisted(item.id) ? "♥" : "♡" }}
+          </button>
           <h2>{{ item.name }}</h2>
           <p class="price">NT$ {{ Number(item.priceTwd).toLocaleString() }}</p>
 
@@ -290,6 +347,22 @@ function localizeField(val, lang) {
 .card-copy {
   display: grid;
   gap: 0.35rem;
+}
+
+.wishlist-btn {
+  align-self: start;
+  background: transparent;
+  border: 0;
+  color: var(--ink-500);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0;
+  width: 1.4rem;
+}
+
+.wishlist-btn.active {
+  color: #be1f35;
 }
 
 .card-kicker {

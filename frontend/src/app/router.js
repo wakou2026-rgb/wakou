@@ -3,6 +3,9 @@ import { createRouter, createWebHistory } from "vue-router";
 import HomeView from "./views/HomeView.vue";
 import LoginView from "../modules/auth/LoginView.vue";
 import RegisterView from "../modules/auth/RegisterView.vue";
+import ForgotPasswordView from "../modules/auth/ForgotPasswordView.vue";
+import ResetPasswordView from "../modules/auth/ResetPasswordView.vue";
+import ChangePasswordView from "../modules/auth/ChangePasswordView.vue";
 import CatalogView from "./views/CatalogView.vue";
 import CartView from "./views/CartView.vue";
 import CheckoutView from "./views/CheckoutView.vue";
@@ -21,6 +24,9 @@ export const routes = [
   { path: "/", component: HomeView },
   { path: "/login", component: LoginView },
   { path: "/register", component: RegisterView },
+  { path: "/forgot-password", component: ForgotPasswordView },
+  { path: "/reset-password", component: ResetPasswordView },
+  { path: "/change-password", component: ChangePasswordView },
   { path: "/catalog", component: CatalogView },
   { path: "/collections", component: CollectionView, meta: { title: "Collections" } },
   { path: "/catalog/:id", component: ProductDetailView },
@@ -28,7 +34,7 @@ export const routes = [
   { path: "/checkout", component: CheckoutView },
   { path: "/comm-room/:id", component: CommRoomView },
   { path: "/dashboard", component: DashboardView, meta: { title: "Account Center" } },
-  { path: "/dashboard/:section(timeline|rooms|orders|messages|points|coupons|gacha)", component: AccountSectionView, meta: { title: "Account Detail" } },
+  { path: "/dashboard/:section(timeline|rooms|orders|messages|points|coupons|gacha|wishlist)", component: AccountSectionView, meta: { title: "Account Detail" } },
   { path: "/magazine", component: MagazineView, meta: { title: "Magazine" } },
   { path: "/magazine/:id(.*)", component: MagazineDetailView },
   { path: "/about", component: AboutView },

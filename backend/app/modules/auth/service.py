@@ -150,6 +150,8 @@ def login_user(session: Session, email: str, password: str) -> tuple[str, str]:
     user = session.scalar(select(User).filter_by(email=normalized_email))
     if not user or not verify_password(password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+    if user.is_banned:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is banned")
 
     access_token = create_access_token(subject=user.email, role=user.role)
     refresh_token = create_refresh_token(subject=user.email, role=user.role)

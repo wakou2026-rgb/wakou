@@ -29,6 +29,15 @@ class OrderStatusUpdatePayload(BaseModel):
     final_amount_twd: int | None = None
 
 
+class OrderRefundPayload(BaseModel):
+    reason: str
+
+
+class OrderBulkStatusPayload(BaseModel):
+    order_ids: list[str] = Field(min_length=1)
+    status: str
+
+
 class CommMessageItem(BaseModel):
     id: int
     room_id: int
