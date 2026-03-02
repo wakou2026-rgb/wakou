@@ -75,7 +75,7 @@ def _update_order_status_fallback(
         pass
 
     try:
-        from app.main import ORDERS as _ORDERS  # type: ignore[import]
+        from app.core.state import ORDERS as _ORDERS
         order = _ORDERS.get(order_id)
         if order is None:
             return False, ""
@@ -100,7 +100,7 @@ def admin_list_orders(
         )
     # Fallback to in-memory ORDERS when DB is empty (legacy in-memory orders)
     try:
-        from app.main import ORDERS as _ORDERS  # type: ignore[import]
+        from app.core.state import ORDERS as _ORDERS
         mem_orders = sorted(_ORDERS.values(), key=lambda x: x["id"], reverse=True)
         items = []
         for o in mem_orders:
@@ -139,7 +139,7 @@ def admin_update_order_status(
         return OrderItem.model_validate(order)
     except ValueError as exc:
         try:
-            from app.main import ORDERS as _ORDERS  # type: ignore[import]
+            from app.core.state import ORDERS as _ORDERS
 
             mem_order = _ORDERS.get(order_id)
             if mem_order is None:

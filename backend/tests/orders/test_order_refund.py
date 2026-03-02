@@ -1,4 +1,4 @@
-from app.main import ORDERS
+from app.core.state import ORDERS
 
 
 def _create_order(client, buyer_token: str) -> int:

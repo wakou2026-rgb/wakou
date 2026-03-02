@@ -1,4 +1,4 @@
-from app.main import PRODUCTS, WISHLISTS
+from app.core.state import PRODUCTS, WISHLISTS
 
 
 def test_add_to_wishlist(client, buyer_token):

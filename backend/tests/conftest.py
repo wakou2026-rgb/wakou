@@ -102,7 +102,7 @@ def payable_order_id(client, buyer_token):
 @pytest.fixture(autouse=True)
 def clear_warehouse_logs():
     """Warehouse timeline test expects empty list; seed data is for demo only."""
-    from app.main import WAREHOUSE_LOGS
+    from app.core.state import WAREHOUSE_LOGS
     WAREHOUSE_LOGS.clear()
     yield
     WAREHOUSE_LOGS.clear()

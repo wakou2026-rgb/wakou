@@ -117,7 +117,7 @@ def admin_list_comm_rooms(
         return {"items": result, "total": len(result)}
     # Fallback to in-memory COMM_ROOMS when DB is empty
     try:
-        from app.main import COMM_ROOMS as _COMM_ROOMS  # type: ignore[import]
+        from app.core.state import COMM_ROOMS as _COMM_ROOMS
         mem_rooms = sorted(_COMM_ROOMS.values(), key=lambda x: x["id"], reverse=True)
         result = [_mem_room_to_dict(r) for r in mem_rooms]
         return {"items": result, "total": len(result)}
@@ -138,7 +138,7 @@ def admin_get_comm_room(
         return _room_to_dict(room, msgs, order)
     # Fallback to in-memory
     try:
-        from app.main import COMM_ROOMS as _COMM_ROOMS  # type: ignore[import]
+        from app.core.state import COMM_ROOMS as _COMM_ROOMS
         mem_room = _COMM_ROOMS.get(room_id)
         if mem_room:
             return _mem_room_to_dict(mem_room)
@@ -204,7 +204,7 @@ def admin_post_message(
 
     # Fallback to in-memory COMM_ROOMS for compatibility with legacy/main.py flow
     try:
-        from app.main import COMM_ROOMS as _COMM_ROOMS  # type: ignore[import]
+        from app.core.state import COMM_ROOMS as _COMM_ROOMS
 
         mem_room = _COMM_ROOMS.get(room_id)
         if not mem_room:
@@ -261,7 +261,7 @@ def admin_set_room_status(
 
     # Fallback to in-memory COMM_ROOMS
     try:
-        from app.main import COMM_ROOMS as _COMM_ROOMS  # type: ignore[import]
+        from app.core.state import COMM_ROOMS as _COMM_ROOMS
 
         mem_room = _COMM_ROOMS.get(room_id)
         if not mem_room:

@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends
 
-from ...main import PRODUCTS, WISHLISTS
+from ...core.state import PRODUCTS, WISHLISTS
 from ..auth.dependencies import get_current_user
 
 wishlist_router = APIRouter(prefix="/api/v1/wishlist", tags=["wishlist"])
