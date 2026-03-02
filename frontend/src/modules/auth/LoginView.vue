@@ -2,9 +2,11 @@
 import { reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "./store";
+import { useI18n } from "vue-i18n";
 
 const router = useRouter();
 const store = useAuthStore();
+const { t } = useI18n();
 
 const form = reactive({
   email: "",
@@ -19,10 +21,10 @@ async function submitLogin() {
   statusText.value = "";
   try {
     await store.login({ email: form.email, password: form.password }, router);
-    statusText.value = "Welcome back.";
+    statusText.value = t('auth.welcome_back');
   } catch (error) {
     isError.value = true;
-    statusText.value = error instanceof Error ? error.message : "Authentication failed";
+    statusText.value = error instanceof Error ? error.message : t('auth.auth_failed');
   }
 }
 </script>
@@ -31,43 +33,46 @@ async function submitLogin() {
   <div class="auth-page container">
     <div class="auth-container">
       <header class="auth-header">
-        <p class="eyebrow">Members Only</p>
-        <h2 class="page-title">登入鑑賞</h2>
+        <p class="eyebrow">{{ $t('auth.eyebrow') }}</p>
+        <h2 class="page-title">{{ $t('auth.login_title') }}</h2>
       </header>
       
       <form class="auth-form panel" @submit.prevent="submitLogin">
         <div class="form-group">
-          <label for="email">Email Address</label>
+          <label for="email">{{ $t('auth.email_label') }}</label>
           <input 
             id="email"
             v-model="form.email" 
             class="field" 
             type="text" 
             placeholder="admin 或 client@example.com" 
+            :aria-label="$t('auth.email_label')"
             required
           />
         </div>
         
         <div class="form-group">
-          <label for="password">Password</label>
+          <label for="password">{{ $t('auth.password_label') }}</label>
           <input 
             id="password"
             v-model="form.password" 
             class="field" 
             type="password" 
             placeholder="••••••••" 
+            :aria-label="$t('auth.password_label')"
             required
           />
         </div>
         
-        <button class="btn btn-primary submit-btn" type="submit">Sign In</button>
+        <button class="btn btn-primary submit-btn" type="submit" :aria-label="$t('auth.sign_in')">{{ $t('auth.sign_in') }}</button>
+        <RouterLink to="/forgot-password" class="forgot-link">{{ $t('auth.forgot_password') }}</RouterLink>
         
         <div class="auth-footer">
           <p v-if="statusText" :class="isError ? 'status-err' : 'status-ok'">
             {{ statusText }}
           </p>
           <p v-else class="register-prompt">
-            尚未擁有鑑賞帳號？ <RouterLink to="/register">申請入會</RouterLink>
+            {{ $t('auth.no_account') }} <RouterLink to="/register">{{ $t('auth.register_link') }}</RouterLink>
           </p>
         </div>
       </form>
@@ -117,6 +122,20 @@ async function submitLogin() {
 .submit-btn {
   margin-top: 1rem;
   width: 100%;
+}
+
+.forgot-link {
+  color: var(--ink-500);
+  display: block;
+  font-size: 0.85rem;
+  margin-top: 1rem;
+  text-align: center;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.forgot-link:hover {
+  color: var(--ink-900);
 }
 
 .auth-footer {

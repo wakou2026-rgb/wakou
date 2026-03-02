@@ -9,7 +9,7 @@ import random
 import re
 import threading
 import time
-from typing import Any
+from typing import Any, cast
 import unicodedata
 
 
@@ -37,6 +37,8 @@ comm_router_module = importlib.import_module("app.modules.orders.comm_router")
 orders_notification_module = importlib.import_module("app.modules.orders.notification")
 reviews_buyer_router_module = importlib.import_module("app.modules.reviews.buyer_router")
 reviews_admin_router_module = importlib.import_module("app.modules.reviews.router")
+slowapi_module = importlib.import_module("slowapi")
+slowapi_errors_module = importlib.import_module("slowapi.errors")
 
 Base = db_module.Base
 SessionLocal = db_module.SessionLocal
@@ -61,12 +63,17 @@ login_user = auth_service.login_user
 refresh_access_token = auth_service.refresh_access_token
 send_register_verification_code = auth_service.send_register_verification_code
 verify_register_verification_code = auth_service.verify_register_verification_code
+_rate_limit_exceeded_handler = slowapi_module._rate_limit_exceeded_handler
+RateLimitExceeded = slowapi_errors_module.RateLimitExceeded
 from app.core.mailer import send_email, build_html_email
 send_ops_notification = orders_notification_module.send_notification
 
 app = FastAPI(title="wakou-api")
+app.state.limiter = auth_router_module.limiter
+app.add_exception_handler(RateLimitExceeded, cast(Any, _rate_limit_exceeded_handler))
 app.include_router(product_router.router)
 app.include_router(product_router.admin_router)
+app.include_router(auth_router_module.auth_router)
 app.include_router(auth_router_module.admin_router)
 app.include_router(magazine_router_module.router)
 app.include_router(magazine_router_module.public_router)

@@ -22,6 +22,7 @@ import {
   deviceDetection,
   useResizeObserver
 } from "@pureadmin/utils";
+import { useSessionTimeout } from "@/utils/sessionTimeout";
 
 import LayTag from "./components/lay-tag/index.vue";
 import LayNavbar from "./components/lay-navbar/index.vue";
@@ -115,6 +116,9 @@ useResizeObserver(appWrapperRef, entries => {
 });
 
 onMounted(() => {
+  // Initialize session timeout for auto-logout after 30 minutes of inactivity
+  useSessionTimeout();
+  
   if (isMobile) {
     toggle("mobile", false);
   }

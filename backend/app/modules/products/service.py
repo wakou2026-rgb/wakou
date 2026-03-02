@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import importlib
 import json
-from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .models import Product
@@ -27,11 +25,6 @@ def resolve_name(product: Product, lang: str) -> str:
     if lang == "ja":
         return product.name_ja
     return product.name_en
-
-
-def _resolve_main_products() -> list[dict[str, Any]]:
-    main_module = importlib.import_module("app.main")
-    return getattr(main_module, "PRODUCTS", [])
 
 
 def resolve_product_extra(product: Product, lang: str) -> tuple[str, list[str]]:
@@ -72,7 +65,6 @@ def list_products(
         stmt = stmt.where(Product.availability == availability)
     if q:
         like = f"%{q}%"
-        from sqlalchemy import or_
         stmt = stmt.where(
             or_(
                 Product.sku.ilike(like),
@@ -83,6 +75,48 @@ def list_products(
         )
     stmt = stmt.order_by(Product.id.asc())
     return list(session.scalars(stmt))
+
+
+def list_products_paginated(
+    session: Session,
+    category: str | None = None,
+    q: str | None = None,
+    sort: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[Product], int]:
+    filtered_stmt = select(Product)
+    if category:
+        filtered_stmt = filtered_stmt.where(Product.category == category)
+    if q:
+        like = f"%{q}%"
+        filtered_stmt = filtered_stmt.where(
+            or_(
+                Product.name_en.ilike(like),
+                Product.name_zh_hant.ilike(like),
+                Product.name_ja.ilike(like),
+                Product.description_en.ilike(like),
+                Product.description_zh.ilike(like),
+                Product.description_ja.ilike(like),
+            )
+        )
+
+    total = session.scalar(select(func.count()).select_from(filtered_stmt.subquery())) or 0
+
+    if sort == "price_asc":
+        filtered_stmt = filtered_stmt.order_by(Product.price_twd.asc(), Product.id.asc())
+    elif sort == "price_desc":
+        filtered_stmt = filtered_stmt.order_by(Product.price_twd.desc(), Product.id.asc())
+    elif sort == "newest":
+        filtered_stmt = filtered_stmt.order_by(Product.listed_at.desc().nullslast(), Product.id.desc())
+    elif sort == "name_asc":
+        filtered_stmt = filtered_stmt.order_by(Product.name_en.asc(), Product.id.asc())
+    else:
+        filtered_stmt = filtered_stmt.order_by(Product.id.asc())
+
+    offset = (page - 1) * page_size
+    items = list(session.scalars(filtered_stmt.offset(offset).limit(page_size)))
+    return items, total
 
 
 def get_product(session: Session, product_id: int) -> Product | None:

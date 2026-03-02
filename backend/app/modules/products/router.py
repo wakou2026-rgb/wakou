@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 
-from datetime import datetime, timezone
+import math
 
 from typing import Any
+from typing import Literal
 
 
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from sqlalchemy.orm import Session
 
@@ -22,7 +23,7 @@ from .models import Product
 
 from .schemas import AdminProductPayload, AdminProductUpdatePayload, ProductDetailResponse, ProductItem, ProductListResponse
 
-from .service import get_product, list_products, resolve_name, resolve_product_extra, resolve_tags, resolve_product_image
+from .service import get_product, list_products, list_products_paginated, resolve_name, resolve_product_extra, resolve_tags, resolve_product_image
 
 router = APIRouter(prefix="/api/v1/products", tags=["products"])
 admin_router = APIRouter(prefix="/api/v1/admin/products", tags=["admin-products"])
@@ -55,11 +56,26 @@ def _build_product_item(product, lang: str) -> ProductItem:
 @router.get("", response_model=ProductListResponse)
 def products_list(
     category: str | None = None,
+    cat: str | None = None,
+    q: str | None = None,
+    sort: Literal["price_asc", "price_desc", "newest", "name_asc"] | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     lang: str = "en",
     session: Session = Depends(get_db_session),
 ) -> ProductListResponse:
-    items = [_build_product_item(p, lang) for p in list_products(session, category=category)]
-    return ProductListResponse(items=items)
+    selected_category = category or cat
+    products, total = list_products_paginated(
+        session,
+        category=selected_category,
+        q=q,
+        sort=sort,
+        page=page,
+        page_size=page_size,
+    )
+    items = [_build_product_item(p, lang) for p in products]
+    total_pages = math.ceil(total / page_size) if total else 0
+    return ProductListResponse(items=items, total=total, page=page, page_size=page_size, total_pages=total_pages)
 
 
 @router.get("/{product_id}", response_model=ProductDetailResponse)
@@ -149,7 +165,7 @@ def admin_create_product(
     session.add(product)
     session.commit()
     session.refresh(product)
-    return _build_product_item(product, "en")
+    return ProductDetailResponse(**_build_product_item(product, "en").model_dump())
 
 
 @admin_router.patch("/{product_id}", response_model=ProductDetailResponse)
@@ -204,7 +220,7 @@ def admin_update_product(
         product.cost_twd = payload.cost_twd
     session.commit()
     session.refresh(product)
-    return _build_product_item(product, "en")
+    return ProductDetailResponse(**_build_product_item(product, "en").model_dump())
 
 
 @admin_router.delete("/{product_id}", status_code=200)

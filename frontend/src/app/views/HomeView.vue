@@ -105,7 +105,7 @@ function formatPrice(val) {
           <RouterLink :to="toMagazinePath(latestMagazine)" class="mag-link">
             <div class="mag-cover img-frame">
             <img
-                :src="latestMagazine.coverUrl || `https://picsum.photos/seed/wakou-mag/900/1200`"
+                :src="latestMagazine.coverUrl || '/logo-transparent.png'"
                 :alt="latestMagazine.title || 'Latest Magazine'"
             />
             </div>
@@ -119,7 +119,7 @@ function formatPrice(val) {
         </template>
         <template v-else>
           <div class="mag-cover img-frame">
-            <img src="https://picsum.photos/seed/wakou-mag/900/1200" alt="Journal" />
+            <img src="/logo-transparent.png" alt="Journal" />
           </div>
           <div class="mag-info">
             <p class="eyebrow">{{ $t('home.latest_journal') }}</p>
@@ -141,7 +141,7 @@ function formatPrice(val) {
           >
             <div class="carousel-img img-frame">
               <img
-                :src="newArrivals[currentSlide].imageUrls?.[0] || `https://picsum.photos/seed/wakou-arr-${newArrivals[currentSlide].id}/600/750`"
+                :src="newArrivals[currentSlide].imageUrls?.[0] || '/logo-transparent.png'"
                 :alt="newArrivals[currentSlide].name"
                 :key="newArrivals[currentSlide].id"
               />

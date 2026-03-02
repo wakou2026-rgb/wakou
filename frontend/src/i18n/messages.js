@@ -196,7 +196,18 @@ export const messages = {
       proceed_checkout: "Proceed to Checkout"
     },
     catalog: {
-      empty_category: "此分類目前尚無商品。"
+      empty_category: "此分類目前尚無商品。",
+      search_placeholder: "搜尋商品名稱或描述",
+      sort_label: "排序",
+      sort_recommended: "推薦",
+      sort_price_low_high: "價格低到高",
+      sort_price_high_low: "價格高到低",
+      sort_newest: "最新上架",
+      sort_name_asc: "名稱 A-Z",
+      pagination_label: "分頁控制",
+      prev_page: "上一頁",
+      next_page: "下一頁",
+      page_indicator: "第 {page} 頁 / 共 {totalPages} 頁"
     },
     checkout: {
       title: "交易流程",
@@ -348,6 +359,36 @@ export const messages = {
       confirm: "確認發起",
       processing: "處理中...",
       added_cart: "已加入購物車"
+    },
+    auth: {
+      eyebrow: "Members Only",
+      login_title: "登入鑑賞",
+      sign_in: "登入",
+      email_label: "Email Address",
+      password_label: "Password",
+      welcome_back: "Welcome back.",
+      auth_failed: "Authentication failed",
+      no_account: "尚未擁有鑑賞帳號？",
+      register_link: "申請入會",
+      forgot_password: "忘記密碼？",
+      register_title: "申請入會",
+      register_eyebrow: "Join Us",
+      register_btn: "Create Account",
+      email_placeholder: "client@example.com",
+      password_placeholder: "••••••••",
+      verify_code_label: "Verification Code",
+      request_code: "Send Code",
+      code_sent: "Verification code sent. Please check your mailbox.",
+      register_success: "Registration successful. Redirecting...",
+      register_failed: "Registration failed",
+      already_account: "已經擁有帳號？",
+      email_required: "請先輸入您的電子郵件",
+      request_code_failed: "驗證碼發送失敗",
+      code_placeholder: "6 位數驗證碼",
+      resend_countdown: "重新發送 ({seconds}s)",
+      account_type: "帳號類型",
+      role_buyer: "鑑賞家（買家）",
+      role_admin: "職人（管理員）"
     }
   },
   ja: {
@@ -533,7 +574,18 @@ export const messages = {
       proceed_checkout: "Proceed to Checkout"
     },
     catalog: {
-      empty_category: "このカテゴリには現在商品がありません。"
+      empty_category: "このカテゴリには現在商品がありません。",
+      search_placeholder: "商品名または説明で検索",
+      sort_label: "並び替え",
+      sort_recommended: "おすすめ",
+      sort_price_low_high: "価格の安い順",
+      sort_price_high_low: "価格の高い順",
+      sort_newest: "新着順",
+      sort_name_asc: "名前 A-Z",
+      pagination_label: "ページネーション",
+      prev_page: "前へ",
+      next_page: "次へ",
+      page_indicator: "{page} / {totalPages} ページ"
     },
     checkout: {
       title: "取引フロー",
@@ -685,6 +737,36 @@ export const messages = {
       confirm: "相談を開始",
       processing: "処理中...",
       added_cart: "カートに追加しました"
+    },
+    auth: {
+      eyebrow: "Members Only",
+      login_title: "ログイン",
+      sign_in: "ログイン",
+      email_label: "メールアドレス",
+      password_label: "パスワード",
+      welcome_back: "お帰りなさい。",
+      auth_failed: "認証に失敗しました",
+      no_account: "アカウントをお持ちでないですか？",
+      register_link: "新規登録",
+      forgot_password: "パスワードをお忘れですか？",
+      register_title: "新規登録",
+      register_eyebrow: "Join Us",
+      register_btn: "アカウント作成",
+      email_placeholder: "client@example.com",
+      password_placeholder: "••••••••",
+      verify_code_label: "認証コード",
+      request_code: "コードを送信",
+      code_sent: "認証コードを送信しました。メールボックスをご確認ください。",
+      register_success: "登録に成功しました。リダイレクト中...",
+      register_failed: "登録に失敗しました",
+      already_account: "すでにアカウントをお持ちですか？",
+      email_required: "先にメールアドレスを入力してください",
+      request_code_failed: "認証コードの送信に失敗しました",
+      code_placeholder: "6桁の認証コード",
+      resend_countdown: "再送信 ({seconds}s)",
+      account_type: "アカウント種別",
+      role_buyer: "コレクター（バイヤー）",
+      role_admin: "アルチザン（管理者）"
     }
   },
   en: {
@@ -870,7 +952,18 @@ export const messages = {
       proceed_checkout: "Proceed to Checkout"
     },
     catalog: {
-      empty_category: "No items in this category yet."
+      empty_category: "No items in this category yet.",
+      search_placeholder: "Search by product name or description",
+      sort_label: "Sort",
+      sort_recommended: "Recommended",
+      sort_price_low_high: "Price: Low to High",
+      sort_price_high_low: "Price: High to Low",
+      sort_newest: "Newest",
+      sort_name_asc: "Name A-Z",
+      pagination_label: "Pagination",
+      prev_page: "Previous",
+      next_page: "Next",
+      page_indicator: "Page {page} of {totalPages}"
     },
     checkout: {
       title: "Transaction Flow",
@@ -1022,6 +1115,36 @@ export const messages = {
       confirm: "Confirm",
       processing: "Processing...",
       added_cart: "Added to cart"
+    },
+    auth: {
+      eyebrow: "Members Only",
+      login_title: "Sign In",
+      sign_in: "Sign In",
+      email_label: "Email Address",
+      password_label: "Password",
+      welcome_back: "Welcome back.",
+      auth_failed: "Authentication failed",
+      no_account: "Don't have an account?",
+      register_link: "Sign Up",
+      forgot_password: "Forgot password?",
+      register_title: "Sign Up",
+      register_eyebrow: "Join Us",
+      register_btn: "Create Account",
+      email_placeholder: "client@example.com",
+      password_placeholder: "••••••••",
+      verify_code_label: "Verification Code",
+      request_code: "Send Code",
+      code_sent: "Verification code sent. Please check your mailbox.",
+      register_success: "Registration successful. Redirecting...",
+      register_failed: "Registration failed",
+      already_account: "Already have an account?",
+      email_required: "Please enter your email first",
+      request_code_failed: "Failed to send verification code",
+      code_placeholder: "6-digit code",
+      resend_countdown: "Resend ({seconds}s)",
+      account_type: "Account Type",
+      role_buyer: "Collector (Buyer)",
+      role_admin: "Artisan (Admin)"
     }
   }
 };

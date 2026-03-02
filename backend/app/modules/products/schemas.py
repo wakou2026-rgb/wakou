@@ -27,6 +27,10 @@ class ProductItem(BaseModel):
 
 class ProductListResponse(BaseModel):
     items: list[ProductItem]
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+    total_pages: int = 0
 
 
 class ProductDetailResponse(ProductItem):
@@ -47,7 +51,6 @@ class AdminProductPayload(BaseModel):
     price_twd: int
     image_urls: list[str] | None = None
     listed_at: datetime | None = None
-    description: dict[str, str] | None = None
     preview_images: list[str] | None = None
     detail_images: list[str] | None = None
     stock_qty: int = 1
@@ -68,7 +71,6 @@ class AdminProductUpdatePayload(BaseModel):
     price_twd: int | None = None
     image_urls: list[str] | None = None
     listed_at: datetime | None = None
-    description: dict[str, str] | None = None
     preview_images: list[str] | None = None
     detail_images: list[str] | None = None
     stock_qty: int | None = None

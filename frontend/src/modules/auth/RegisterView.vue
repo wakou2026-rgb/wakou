@@ -2,9 +2,11 @@
 import { onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "./store";
+import { useI18n } from "vue-i18n";
 
 const router = useRouter();
 const store = useAuthStore();
+const { t } = useI18n();
 
 const form = reactive({
   email: "",
@@ -46,16 +48,16 @@ async function requestCode() {
   statusText.value = "";
   if (!form.email) {
     isError.value = true;
-    statusText.value = "Please enter your email first";
+    statusText.value = t('auth.email_required');
     return;
   }
   try {
     const result = await store.requestRegisterCode({ email: form.email });
     startCooldown(result.cooldown_seconds || 60);
-    statusText.value = "Verification code sent. Please check your mailbox.";
+    statusText.value = t('auth.code_sent');
   } catch (error) {
     isError.value = true;
-    statusText.value = error instanceof Error ? error.message : "Request verification code failed";
+    statusText.value = error instanceof Error ? error.message : t('auth.request_code_failed');
   }
 }
 
@@ -64,13 +66,13 @@ async function submitRegister() {
   statusText.value = "";
   try {
     await store.register(form);
-    statusText.value = "Registration successful. Redirecting...";
+    statusText.value = t('auth.register_success');
     setTimeout(() => {
       router.push("/login");
     }, 1500);
   } catch (error) {
     isError.value = true;
-    statusText.value = error instanceof Error ? error.message : "Registration failed";
+    statusText.value = error instanceof Error ? error.message : t('auth.register_failed');
   }
 }
 </script>
@@ -79,37 +81,39 @@ async function submitRegister() {
   <div class="auth-page container">
     <div class="auth-container">
       <header class="auth-header">
-        <p class="eyebrow">Join Us</p>
-        <h2 class="page-title">申請入會</h2>
+        <p class="eyebrow">{{ $t('auth.register_eyebrow') }}</p>
+        <h2 class="page-title">{{ $t('auth.register_title') }}</h2>
       </header>
       
       <form class="auth-form panel" @submit.prevent="submitRegister">
         <div class="form-group">
-          <label for="reg-email">Email Address</label>
+          <label for="reg-email">{{ $t('auth.email_label') }}</label>
           <input 
             id="reg-email"
             v-model="form.email" 
             class="field" 
             type="email" 
-            placeholder="client@example.com" 
+            :placeholder="$t('auth.email_placeholder')"
+            :aria-label="$t('auth.email_label')"
             required
           />
         </div>
         
         <div class="form-group">
-          <label for="reg-password">Password</label>
+          <label for="reg-password">{{ $t('auth.password_label') }}</label>
           <input 
             id="reg-password"
             v-model="form.password" 
             class="field" 
             type="password" 
-            placeholder="••••••••" 
+            :placeholder="$t('auth.password_placeholder')"
+            :aria-label="$t('auth.password_label')"
             required
           />
         </div>
 
         <div class="form-group">
-          <label for="verification-code">Verification Code</label>
+          <label for="verification-code">{{ $t('auth.verify_code_label') }}</label>
           <div class="code-row">
             <input
               id="verification-code"
@@ -118,36 +122,38 @@ async function submitRegister() {
               type="text"
               inputmode="numeric"
               maxlength="6"
-              placeholder="6-digit code"
+              :placeholder="$t('auth.code_placeholder')"
+              :aria-label="$t('auth.verify_code_label')"
               required
             />
             <button
               class="btn btn-secondary code-btn"
               type="button"
               :disabled="codeCooldown > 0"
+              :aria-label="$t('auth.request_code')"
               @click="requestCode"
             >
-              {{ codeCooldown > 0 ? `Resend (${codeCooldown}s)` : "Send Code" }}
+              {{ codeCooldown > 0 ? $t('auth.resend_countdown', { seconds: codeCooldown }) : $t('auth.request_code') }}
             </button>
           </div>
         </div>
 
         <div class="form-group">
-          <label for="role">Account Type</label>
-          <select id="role" v-model="form.role" class="field select-styled">
-            <option value="buyer">Collector (Buyer)</option>
-            <option value="admin">Artisan (Admin)</option>
+          <label for="role">{{ $t('auth.account_type') }}</label>
+          <select id="role" v-model="form.role" class="field select-styled" :aria-label="$t('auth.account_type')">
+            <option value="buyer">{{ $t('auth.role_buyer') }}</option>
+            <option value="admin">{{ $t('auth.role_admin') }}</option>
           </select>
         </div>
         
-        <button class="btn btn-primary submit-btn" type="submit">Create Account</button>
+        <button class="btn btn-primary submit-btn" type="submit" :aria-label="$t('auth.register_btn')">{{ $t('auth.register_btn') }}</button>
         
         <div class="auth-footer">
           <p v-if="statusText" :class="isError ? 'status-err' : 'status-ok'">
             {{ statusText }}
           </p>
           <p v-else class="register-prompt">
-            已經擁有帳號？ <RouterLink to="/login">登入鑑賞</RouterLink>
+            {{ $t('auth.already_account') }} <RouterLink to="/login">{{ $t('auth.login_title') }}</RouterLink>
           </p>
         </div>
       </form>

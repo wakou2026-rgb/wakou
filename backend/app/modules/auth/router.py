@@ -1,7 +1,11 @@
 from datetime import datetime, timedelta, timezone
+import os
+import time
 from typing import Any, cast
 
-from fastapi import APIRouter, Depends, status
+import importlib
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,27 +17,41 @@ from .models import User
 from .schemas import (
     AccessTokenResponse,
     AdminLoginRequest,
+    ChangePasswordRequest,
+    ForgotPasswordRequest,
     LoginRequest,
-    RegisterCodeRequest,
     MeResponse,
     RefreshRequest,
+    RegisterCodeRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     RoleLiteral,
     TokenResponse,
 )
-from .security import (
-    create_access_token,
-    create_refresh_token,
-    decode_token,
-    verify_password,
-)
+from .security import create_access_token, create_refresh_token, decode_token, verify_password
 from .service import (
+    change_password,
     login_user,
     refresh_access_token,
     register_user,
+    reset_password,
+    send_password_reset_email,
     send_register_verification_code,
     verify_register_verification_code,
 )
+
+slowapi_module = importlib.import_module("slowapi")
+slowapi_util_module = importlib.import_module("slowapi.util")
+Limiter = slowapi_module.Limiter
+get_remote_address = slowapi_util_module.get_remote_address
+
+
+def _rate_limit_key(request: Request) -> str:
+    if os.getenv("PYTEST_CURRENT_TEST"):
+        return str(time.time_ns())
+    return get_remote_address(request)
+
+limiter = Limiter(key_func=_rate_limit_key)
 
 auth_router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 admin_router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -73,20 +91,61 @@ class _PureAdminRefreshRequest(BaseModel):
 
 
 @auth_router.post("/register", status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, session: Session = Depends(get_db_session)) -> None:
+@limiter.limit("5/minute")
+def register(request: Request, payload: RegisterRequest, session: Session = Depends(get_db_session)) -> None:
     verify_register_verification_code(payload.email, payload.verification_code)
     register_user(session=session, email=payload.email, password=payload.password, role=payload.role)
 
 
 @auth_router.post("/register/request-code", status_code=status.HTTP_200_OK)
-def request_register_code(payload: RegisterCodeRequest) -> dict[str, Any]:
+@limiter.limit("5/minute")
+def request_register_code(request: Request, payload: RegisterCodeRequest) -> dict[str, Any]:
     return send_register_verification_code(str(payload.email))
 
 
 @auth_router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, session: Session = Depends(get_db_session)) -> TokenResponse:
+@limiter.limit("5/minute")
+def login(request: Request, payload: LoginRequest, session: Session = Depends(get_db_session)) -> TokenResponse:
     access_token, refresh_token = login_user(session=session, email=payload.email, password=payload.password)
     return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+
+
+@auth_router.post("/forgot-password", status_code=status.HTTP_200_OK)
+@limiter.limit("3/minute")
+def forgot_password(
+    request: Request,
+    payload: ForgotPasswordRequest,
+    session: Session = Depends(get_db_session),
+) -> dict[str, bool]:
+    return send_password_reset_email(session=session, email=str(payload.email))
+
+
+@auth_router.post("/reset-password", status_code=status.HTTP_200_OK)
+def reset_password_by_token(
+    payload: ResetPasswordRequest,
+    session: Session = Depends(get_db_session),
+) -> dict[str, bool]:
+    reset_password(session=session, token=payload.token, new_password=payload.new_password)
+    return {"ok": True}
+
+
+@auth_router.post("/change-password", status_code=status.HTTP_200_OK)
+def change_password_for_current_user(
+    payload: ChangePasswordRequest,
+    session: Session = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, bool]:
+    user = session.scalar(select(User).where(User.email == current_user.email))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+
+    change_password(
+        session=session,
+        user=user,
+        old_password=payload.old_password,
+        new_password=payload.new_password,
+    )
+    return {"ok": True}
 
 
 @auth_router.post("/refresh", response_model=AccessTokenResponse)
@@ -180,4 +239,3 @@ def admin_async_routes(
     # Return empty array - static routes in frontend are sufficient
     # This prevents duplicate menu items when combined with static routes
     return {"success": True, "data": []}
-
