@@ -1,7 +1,18 @@
 def test_buyer_cannot_access_admin_endpoint(client):
+    code_response = client.post(
+        "/api/v1/auth/register/request-code",
+        json={"email": "buyer@b.com"},
+    )
+    assert code_response.status_code == 200
+
     client.post(
         "/api/v1/auth/register",
-        json={"email": "buyer@b.com", "password": "Pass123!", "role": "buyer"},
+        json={
+            "email": "buyer@b.com",
+            "password": "Pass123!",
+            "role": "buyer",
+            "verification_code": code_response.json().get("dev_code"),
+        },
     )
     login_response = client.post(
         "/api/v1/auth/login",
@@ -17,9 +28,20 @@ def test_buyer_cannot_access_admin_endpoint(client):
 
 
 def test_admin_can_access_admin_products(client):
+    code_response = client.post(
+        "/api/v1/auth/register/request-code",
+        json={"email": "admin@b.com"},
+    )
+    assert code_response.status_code == 200
+
     client.post(
         "/api/v1/auth/register",
-        json={"email": "admin@b.com", "password": "Pass123!", "role": "admin"},
+        json={
+            "email": "admin@b.com",
+            "password": "Pass123!",
+            "role": "admin",
+            "verification_code": code_response.json().get("dev_code"),
+        },
     )
     login_response = client.post(
         "/api/v1/auth/login",

@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { loginRequest, registerRequest } from "./api";
+import { loginRequest, registerRequest, requestRegisterCode } from "./api";
 
 function getStorage() {
   if (typeof window === "undefined") {
@@ -43,6 +43,9 @@ export const useAuthStore = defineStore("auth", {
   actions: {
     async register(payload) {
       await registerRequest(payload);
+    },
+    async requestRegisterCode(payload) {
+      return requestRegisterCode(payload);
     },
     async login(credentials, router) {
       const result = await loginRequest(credentials);

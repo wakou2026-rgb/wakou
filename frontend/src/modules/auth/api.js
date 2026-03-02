@@ -1,13 +1,34 @@
+function extractErrorMessage(data, fallback) {
+  if (data && typeof data === "object" && typeof data.detail === "string" && data.detail.trim()) {
+    return data.detail;
+  }
+  return fallback;
+}
+
+export async function requestRegisterCode(payload) {
+  const response = await fetch("/api/v1/auth/register/request-code", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(data, "request register code failed"));
+  }
+  return data;
+}
+
 export async function registerRequest(payload) {
   const response = await fetch("/api/v1/auth/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   });
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error("register failed");
+    throw new Error(extractErrorMessage(data, "register failed"));
   }
-  return response.json();
+  return data;
 }
 
 export async function loginRequest(payload) {

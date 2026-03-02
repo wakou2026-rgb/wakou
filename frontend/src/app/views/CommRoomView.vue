@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import { useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { 
@@ -22,8 +22,11 @@ const isManager = computed(() => ["admin", "super_admin", "sales"].includes(auth
 
 const messageForm = reactive({
   message: "",
-  image_url: ""
+  image_url: "",
+  offer_price_twd: null
 });
+
+const selectedImageName = ref("");
 
 const quoteForm = reactive({
   final_price_twd: 0,
@@ -36,6 +39,7 @@ const proofForm = reactive({
 });
 
 const isProcessing = ref(false);
+let refreshTimer = null;
 
 async function loadRoom() {
   isError.value = false;
@@ -59,10 +63,13 @@ async function sendChat() {
   try {
     await sendMessage(route.params.id, {
       message: messageForm.message,
-      image_url: messageForm.image_url
+      image_url: messageForm.image_url,
+      offer_price_twd: messageForm.offer_price_twd
     });
     messageForm.message = "";
     messageForm.image_url = "";
+    messageForm.offer_price_twd = null;
+    selectedImageName.value = "";
     await loadRoom();
   } catch (error) {
     isError.value = true;
@@ -70,6 +77,37 @@ async function sendChat() {
   } finally {
     isProcessing.value = false;
   }
+}
+
+async function refreshRoomSilently() {
+  if (!room.value || isProcessing.value) return;
+  try {
+    const latest = await fetchCommRoom(route.params.id);
+    const previousMessageCount = Array.isArray(room.value?.messages) ? room.value.messages.length : 0;
+    room.value = latest;
+    const latestCount = Array.isArray(latest?.messages) ? latest.messages.length : 0;
+    if (latestCount > previousMessageCount) {
+      statusText.value = "對話已同步最新內容";
+    }
+  } catch (_) {
+    // silent refresh should not interrupt typing flow
+  }
+}
+
+function handleImageFileChange(event) {
+  const file = event?.target?.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    isError.value = true;
+    statusText.value = "請選擇圖片檔案";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    messageForm.image_url = typeof reader.result === "string" ? reader.result : "";
+    selectedImageName.value = file.name;
+  };
+  reader.readAsDataURL(file);
 }
 
 async function submitQuote() {
@@ -139,7 +177,19 @@ function formatDate(isoString) {
   return date.toLocaleString();
 }
 
-onMounted(loadRoom);
+onMounted(async () => {
+  await loadRoom();
+  refreshTimer = setInterval(() => {
+    refreshRoomSilently();
+  }, 5000);
+});
+
+onUnmounted(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+});
 </script>
 
 <template>
@@ -209,6 +259,7 @@ onMounted(loadRoom);
               <div v-if="msg.from === 'system'" class="system-text">{{ msg.message }} <span class="time">{{ formatDate(msg.timestamp) }}</span></div>
               <div v-else class="msg-bubble">
                 <p v-if="msg.message" class="msg-text">{{ msg.message }}</p>
+                <div v-if="msg.offer_price_twd" class="offer-tag">議價提案：NT$ {{ Number(msg.offer_price_twd).toLocaleString() }}</div>
                 <div v-if="msg.image_url" class="msg-image-wrap">
                   <img :src="msg.image_url" alt="Attached image" class="msg-image" />
                   <div v-if="msg.from === 'admin'" class="cert-badge">{{ $t('comm_room.cert_badge') }}</div>
@@ -222,6 +273,11 @@ onMounted(loadRoom);
         <div class="chat-input-area" v-if="room.order?.status !== 'paid' && room.order?.status !== 'completed'">
           <form @submit.prevent="sendChat" class="chat-form">
             <input v-model="messageForm.image_url" type="text" class="field compact" :placeholder="$t('comm_room.placeholder_image')" />
+            <div class="input-row">
+              <input class="field" type="file" accept="image/*" @change="handleImageFileChange" />
+              <input v-model.number="messageForm.offer_price_twd" type="number" min="0" class="field" placeholder="議價提案金額 (選填)" />
+            </div>
+            <p v-if="selectedImageName" class="file-hint">已選擇圖片：{{ selectedImageName }}</p>
             <div class="input-row">
               <input v-model="messageForm.message" type="text" class="field" :placeholder="$t('comm_room.placeholder_message')" />
               <button class="btn btn-primary" type="submit" :disabled="isProcessing">{{ $t('comm_room.send') }}</button>
@@ -479,6 +535,18 @@ onMounted(loadRoom);
   border-radius: 4px;
 }
 
+.offer-tag {
+  margin-top: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: #fdf6ec;
+  color: #b88230;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
 .cert-badge {
   font-size: 0.7rem;
   color: #e6a23c;
@@ -541,6 +609,12 @@ onMounted(loadRoom);
   padding: 0.4rem 0.6rem;
   font-size: 0.8rem;
   margin: 0;
+}
+
+.file-hint {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--ink-500);
 }
 
 .action-column h3 {

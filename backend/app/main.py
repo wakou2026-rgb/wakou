@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib
 import os
 import random
 import re
+import threading
+import time
 from typing import Any
 import unicodedata
 
@@ -20,6 +23,7 @@ auth_models = importlib.import_module("app.modules.auth.models")
 auth_schemas = importlib.import_module("app.modules.auth.schemas")
 auth_security = importlib.import_module("app.modules.auth.security")
 auth_service = importlib.import_module("app.modules.auth.service")
+mailer_module = importlib.import_module("app.core.mailer")
 auth_router_module = importlib.import_module("app.modules.auth.router")
 magazine_router_module = importlib.import_module("app.modules.magazines.router")
 product_models = importlib.import_module("app.modules.products.models")
@@ -30,6 +34,7 @@ crm_router_module = importlib.import_module("app.modules.crm.router")
 orders_router_module = importlib.import_module("app.modules.orders.router")
 categories_router_module = importlib.import_module("app.modules.categories.router")
 comm_router_module = importlib.import_module("app.modules.orders.comm_router")
+orders_notification_module = importlib.import_module("app.modules.orders.notification")
 reviews_buyer_router_module = importlib.import_module("app.modules.reviews.buyer_router")
 reviews_admin_router_module = importlib.import_module("app.modules.reviews.router")
 
@@ -54,6 +59,10 @@ decode_token = auth_security.decode_token
 register_user = auth_service.register_user
 login_user = auth_service.login_user
 refresh_access_token = auth_service.refresh_access_token
+send_register_verification_code = auth_service.send_register_verification_code
+verify_register_verification_code = auth_service.verify_register_verification_code
+from app.core.mailer import send_email, build_html_email
+send_ops_notification = orders_notification_module.send_notification
 
 app = FastAPI(title="wakou-api")
 app.include_router(product_router.router)
@@ -98,6 +107,16 @@ def _seed_demo_data() -> None:  # noqa: WPS430
         # Seed failures must not prevent server startup
         import traceback
         traceback.print_exc()
+
+
+@app.on_event("startup")
+def _start_inquiry_reminder_worker() -> None:  # noqa: WPS430
+    global _inquiry_reminder_thread_started
+    if _inquiry_reminder_thread_started:
+        return
+    worker = threading.Thread(target=_inquiry_reminder_loop, daemon=True, name="wakou-inquiry-reminder")
+    worker.start()
+    _inquiry_reminder_thread_started = True
 
 class OrderPayload(BaseModel):
     product_id: int = Field(validation_alias=AliasChoices("product_id", "productId"))
@@ -166,6 +185,7 @@ class ReviewPayload(BaseModel):
 class CommRoomMessagePayload(BaseModel):
     message: str
     image_url: str | None = None
+    offer_price_twd: int | None = None
 
 class FinalQuotePayload(BaseModel):
     final_price_twd: int
@@ -343,6 +363,13 @@ FULL_ADMIN_ROLES = {"admin", "super_admin"}
 PRODUCT_ADMIN_ROLES = {"admin", "super_admin", "maintenance"}
 ORDER_ADMIN_ROLES = {"admin", "super_admin", "sales", "maintenance"}
 
+INQUIRY_NOTIFY_TO_EMAIL = os.getenv("NOTIFY_TO_EMAIL", "").strip()
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost").rstrip("/")
+ADMIN_BASE_URL = os.getenv("ADMIN_BASE_URL", "http://localhost/admin").rstrip("/")
+INQUIRY_REMINDER_HOURS = max(int(os.getenv("INQUIRY_REMINDER_HOURS", "6")), 1)
+INQUIRY_REMINDER_SCAN_SECONDS = max(int(os.getenv("INQUIRY_REMINDER_SCAN_SECONDS", "600")), 60)
+_inquiry_reminder_thread_started = False
+
 
 def _get_user_dict(user: object = Depends(auth_dependencies.get_current_user)) -> dict[str, str]:
     """Bridge: wraps get_current_user so old routes benefit from dependency_overrides in tests."""
@@ -471,6 +498,133 @@ def _user_notifications(email: str) -> dict[str, Any]:
     last_read = int(USER_NOTIFICATION_CURSOR.get(email, 0))
     unread = len([item for item in related if int(item.get("id") or 0) > last_read])
     return {"last_read_event_id": last_read, "unread": unread, "items": related[:20]}
+
+
+def _room_links(room_id: int | None) -> tuple[str, str]:
+    if room_id is None:
+        return f"{ADMIN_BASE_URL}/commrooms/index", f"{FRONTEND_BASE_URL}/dashboard"
+    return (
+        f"{ADMIN_BASE_URL}/commrooms/index?room={room_id}",
+        f"{FRONTEND_BASE_URL}/comm-room/{room_id}?from=email",
+    )
+
+
+def _send_admin_inquiry_email(subject: str, room_id: int | None = None, content: str = "", fields: dict[str, str] | None = None) -> None:
+    if not INQUIRY_NOTIFY_TO_EMAIL:
+        return
+    admin_link, buyer_link = _room_links(room_id)
+    
+    plain_parts = []
+    if content:
+        plain_parts.append(content)
+    if fields:
+        for k, v in fields.items():
+            plain_parts.append(f"{k}: {v}")
+    
+    plain_parts.append("")
+    plain_parts.append(f"後台快速處理：{admin_link}")
+    plain_parts.append(f"買家對話頁：{buyer_link}")
+    plain = "\n".join(plain_parts)
+
+    html = build_html_email(
+        subject=subject,
+        preheader="Wakou Concierge Notification",
+        content=content,
+        fields=fields,
+        actions=[
+            {"label": "前往後台處理", "url": admin_link},
+            {"label": "開啟對話頁", "url": buyer_link}
+        ]
+    )
+    send_email(INQUIRY_NOTIFY_TO_EMAIL, subject, plain, html_body=html)
+
+
+def _notify_ops_channels(subject: str, body: str, html_body: str | None = None) -> None:
+    def _runner() -> None:
+        try:
+            asyncio.run(send_ops_notification(subject=subject, body=body, html_body=html_body))
+        except Exception:
+            pass
+
+    threading.Thread(target=_runner, daemon=True, name="wakou-ops-notify").start()
+
+
+def _mark_buyer_inquiry(room_id: int, room: dict[str, Any], message: str) -> None:
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    room["last_buyer_message_at"] = now_iso
+    room["pending_buyer_inquiry"] = True
+
+    if not room.get("first_inquiry_notified_at"):
+        room["first_inquiry_notified_at"] = now_iso
+        room["last_notified_at"] = now_iso
+        _send_admin_inquiry_email(
+            subject=f"[Wakou] 首次詢問通知 Room #{room_id}",
+            room_id=room_id,
+            content="買家已發起首次商品詢問，請儘速回覆以提供最佳服務體驗。",
+            fields={
+                "買家": room.get('buyer_email', '-'),
+                "商品": room.get('product_name', '-'),
+                "諮詢室": f"#{room_id}",
+                "訊息內容": message[:200],
+            }
+        )
+
+
+def _mark_admin_reply(room: dict[str, Any]) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    room["last_admin_reply_at"] = now_iso
+    room["pending_buyer_inquiry"] = False
+
+
+def _scan_and_send_inquiry_reminders() -> None:
+    now = datetime.now(timezone.utc)
+    reminder_threshold = timedelta(hours=INQUIRY_REMINDER_HOURS)
+
+    for room_id, room in COMM_ROOMS.items():
+        if not room.get("pending_buyer_inquiry"):
+            continue
+
+        last_notified_raw = str(room.get("last_notified_at") or "")
+        if not last_notified_raw:
+            continue
+
+        try:
+            last_notified = datetime.fromisoformat(last_notified_raw.replace("Z", "+00:00"))
+        except ValueError:
+            room["last_notified_at"] = now.isoformat()
+            continue
+
+        if now - last_notified < reminder_threshold:
+            continue
+
+        buyer_message = ""
+        for msg in reversed(room.get("messages", [])):
+            if msg.get("from") == "buyer":
+                buyer_message = str(msg.get("message") or "")
+                break
+
+        _send_admin_inquiry_email(
+            subject=f"[Wakou] 未回覆提醒 Room #{room_id}",
+            room_id=room_id,
+            content=f"距離上次通知已超過 {INQUIRY_REMINDER_HOURS} 小時，為確保客戶體驗，請盡快回覆買家訊息。",
+            fields={
+                "買家": room.get('buyer_email', '-'),
+                "商品": room.get('product_name', '-'),
+                "諮詢室": f"#{room_id}",
+                "最近訊息": buyer_message[:200],
+            }
+        )
+        room["last_notified_at"] = now.isoformat()
+
+
+def _inquiry_reminder_loop() -> None:
+    while True:
+        try:
+            _scan_and_send_inquiry_reminders()
+        except Exception:
+            pass
+        time.sleep(INQUIRY_REMINDER_SCAN_SECONDS)
 
 
 def _admin_console_menu(role: str) -> list[dict[str, Any]]:
@@ -1774,12 +1928,21 @@ def health() -> dict[str, str]:
 def register(payload: RegisterRequest) -> dict[str, str]:
     session = SessionLocal()
     try:
+        verify_register_verification_code(payload.email, payload.verification_code)
         user = register_user(session, payload.email, payload.password, payload.role)
         if user.email not in USER_DISPLAY_NAMES:
             USER_DISPLAY_NAMES[user.email] = user.email.split("@", 1)[0]
         return {"email": user.email, "role": user.role}
     finally:
         session.close()
+
+
+@app.post("/api/v1/auth/register/request-code")
+def request_register_code(payload: dict[str, str]) -> dict[str, Any]:
+    email = str(payload.get("email", "")).strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="email is required")
+    return send_register_verification_code(email)
 
 
 @app.post("/api/v1/auth/login")
@@ -2056,6 +2219,11 @@ def create_order(payload: OrderPayload, user: dict = Depends(_get_user_dict)) ->
         "status": "open",
         "messages": [{"id": 1, "from": "system", "message": "諮詢室已建立", "timestamp": datetime.now(timezone.utc).isoformat()}],
         "shipping_quote": None,
+        "pending_buyer_inquiry": False,
+        "first_inquiry_notified_at": None,
+        "last_notified_at": None,
+        "last_buyer_message_at": None,
+        "last_admin_reply_at": None,
     }
     ORDERS[order_id] = {
         "id": order_id,
@@ -2196,9 +2364,14 @@ def send_comm_room_message(room_id: int, payload: CommRoomMessagePayload, user: 
         "from": sender_type,
         "message": payload.message,
         "image_url": payload.image_url,
+        "offer_price_twd": payload.offer_price_twd,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
     room.setdefault("messages", []).append(msg)
+    if sender_type == "buyer":
+        _mark_buyer_inquiry(room_id, room, payload.message)
+    else:
+        _mark_admin_reply(room)
     _append_event(
         "comm.message",
         user["email"],
@@ -2206,7 +2379,11 @@ def send_comm_room_message(room_id: int, payload: CommRoomMessagePayload, user: 
         room_id=room_id,
         title="新增對話訊息",
         detail=payload.message[:80] if payload.message else "傳送圖片訊息",
-        payload={"buyer_email": room["buyer_email"], "has_image": bool(payload.image_url)},
+        payload={
+            "buyer_email": room["buyer_email"],
+            "has_image": bool(payload.image_url),
+            "has_offer": payload.offer_price_twd is not None,
+        },
     )
     return msg
 
@@ -2236,6 +2413,7 @@ def set_final_quote(room_id: int, payload: FinalQuotePayload, user: dict = Depen
         "message": f"管理員已更新報價：商品 NT${payload.final_price_twd} / 運費 NT${payload.shipping_fee_twd} / 折扣 NT${payload.discount_twd or 0}",
         "timestamp": datetime.now(timezone.utc).isoformat()
     })
+    _mark_admin_reply(room)
     _append_event(
         "order.quoted",
         user["email"],
@@ -2303,6 +2481,32 @@ def upload_proof(room_id: int, payload: TransferProofPayload, user: dict = Depen
         detail="買家已提供匯款存證，待管理員確認",
         payload={"buyer_email": room["buyer_email"], "transfer_proof_url": payload.transfer_proof_url},
     )
+    content = "買家已提供匯款存證，待管理員確認"
+    fields = {
+        "買家": room['buyer_email'],
+        "諮詢室": f"#{room_id}",
+        "證明網址": payload.transfer_proof_url,
+    }
+    admin_link = f"{ADMIN_BASE_URL}/commrooms/index?room={room_id}"
+    
+    html = build_html_email(
+        subject=f"[Wakou] 匯款證明上傳 Order #{order['id']}",
+        preheader="Payment Proof Uploaded",
+        content=content,
+        fields=fields,
+        actions=[{"label": "前往後台處理", "url": admin_link}]
+    )
+
+    _notify_ops_channels(
+        subject=f"[Wakou] 匯款證明上傳 Order #{order['id']}",
+        body=(
+            f"買家: {room['buyer_email']}\n"
+            f"諮詢室: #{room_id}\n"
+            f"證明網址: {payload.transfer_proof_url}\n"
+            f"後台快速處理: {admin_link}"
+        ),
+        html_body=html,
+    )
     return {"ok": True}
 
 @app.post("/api/v1/orders/{order_id}/confirm-payment")
@@ -2344,6 +2548,31 @@ def confirm_manual_payment(order_id: int, user: dict = Depends(_get_user_dict)):
         title="確認收款",
         detail="管理員完成入帳核款",
         payload={"buyer_email": order["buyer_email"], "amount_twd": order.get("final_amount_twd") or order.get("amount_twd")},
+    )
+    admin_link = f"{ADMIN_BASE_URL}/orders/index"
+    content = "管理員已確認收款，訂單狀態已更新為已付款。"
+    fields = {
+        "買家": order['buyer_email'],
+        "金額": f"NT$ {int(order.get('final_amount_twd') or order.get('amount_twd') or 0):,}",
+        "狀態": "paid",
+    }
+    html = build_html_email(
+        subject=f"[Wakou] 管理員已確認收款 Order #{order_id}",
+        preheader="Payment Confirmed",
+        content=content,
+        fields=fields,
+        actions=[{"label": "查看後台訂單", "url": admin_link}]
+    )
+
+    _notify_ops_channels(
+        subject=f"[Wakou] 管理員已確認收款 Order #{order_id}",
+        body=(
+            f"買家: {order['buyer_email']}\n"
+            f"金額: NT${int(order.get('final_amount_twd') or order.get('amount_twd') or 0):,}\n"
+            f"狀態: paid\n"
+            f"後台訂單: {admin_link}"
+        ),
+        html_body=html,
     )
     return {"ok": True, "status": "paid"}
 

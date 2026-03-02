@@ -24,7 +24,7 @@ const { t } = useI18n();
         <article class="contact-row">
           <p class="row-head">Instagram</p>
           <div>
-            <a class="line-link" href="https://www.instagram.com/" target="_blank" rel="noopener noreferrer">@wakou_select</a>
+            <a class="line-link" href="https://www.instagram.com/wakou_vintage_select?igsh=MWFzZzIzcDltamVpZA%3D%3D&utm_source=qr" target="_blank" rel="noopener noreferrer">@wakou_vintage_select</a>
             <p class="hint">{{ $t('contact.ig_hint') }}</p>
           </div>
         </article>

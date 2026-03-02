@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, nextTick } from "vue";
+import { ref, computed, onMounted, onUnmounted, nextTick } from "vue";
 import {
   getCommRooms,
   getCommRoom,
@@ -12,8 +12,10 @@ import {
   type NotificationConfig
 } from "@/api/commRooms";
 import { ElMessage } from "element-plus";
+import { useRoute } from "vue-router";
 
 defineOptions({ name: "CommRoomsIndex" });
+const route = useRoute();
 
 const activeTab = ref("rooms");
 const roomsLoading = ref(false);
@@ -21,6 +23,9 @@ const rooms = ref<CommRoom[]>([]);
 const selectedRoom = ref<CommRoom | null>(null);
 const roomLoading = ref(false);
 const replyText = ref("");
+const replyImageUrl = ref("");
+const replyOfferPrice = ref<number | null>(null);
+const replyImageName = ref("");
 const replySending = ref(false);
 const messagesContainer = ref<HTMLElement | null>(null);
 
@@ -45,6 +50,7 @@ const notifConfig = ref<Partial<NotificationConfig>>({
   email_recipients: ""
 });
 const notifSaving = ref(false);
+let roomRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
 const formatNTD = (n: number | null | undefined) =>
   n != null ? "NT$" + n.toLocaleString() : "—";
@@ -109,16 +115,67 @@ const scrollToBottom = () => {
 };
 
 const sendReply = async () => {
-  if (!selectedRoom.value || !replyText.value.trim()) return;
+  if (!selectedRoom.value) return;
+  if (!replyText.value.trim() && !replyImageUrl.value.trim() && !replyOfferPrice.value) return;
   try {
     replySending.value = true;
-    await postAdminMessage(selectedRoom.value.id, replyText.value.trim());
+    await postAdminMessage(selectedRoom.value.id, {
+      message: replyText.value.trim(),
+      image_url: replyImageUrl.value.trim() || undefined,
+      offer_price_twd: replyOfferPrice.value || undefined
+    });
     replyText.value = "";
+    replyImageUrl.value = "";
+    replyOfferPrice.value = null;
+    replyImageName.value = "";
     await selectRoom(selectedRoom.value);
   } catch (e: any) {
     ElMessage.error(e?.message || "傳送失敗");
   } finally {
     replySending.value = false;
+  }
+};
+
+const onReplyFileChange = (event: Event) => {
+  const input = event.target as HTMLInputElement;
+  const file = input?.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    ElMessage.error("請選擇圖片檔案");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    replyImageUrl.value = typeof reader.result === "string" ? reader.result : "";
+    replyImageName.value = file.name;
+  };
+  reader.readAsDataURL(file);
+};
+
+const refreshSelectedRoomSilently = async () => {
+  if (!selectedRoom.value || roomLoading.value || replySending.value || quoteSaving.value) return;
+  try {
+    const res: any = await getCommRoom(selectedRoom.value.id);
+    const raw = res?.data ?? res;
+    if (raw && !raw.order) {
+      raw.order = {
+        id: raw.order_id,
+        amount_twd: raw.amount_twd ?? null,
+        discount_twd: raw.discount_twd ?? 0,
+        final_price_twd: raw.final_price_twd ?? null,
+        shipping_fee_twd: raw.shipping_fee_twd ?? 0,
+        final_amount_twd: raw.final_amount_twd ?? null,
+        shipping_carrier: raw.shipping_carrier ?? null,
+        tracking_number: raw.tracking_number ?? null,
+        status: raw.status
+      };
+    }
+    selectedRoom.value = raw;
+    await loadRooms();
+    await nextTick();
+    scrollToBottom();
+  } catch (_) {
+    // silent poll - ignore transient failures
   }
 };
 
@@ -177,9 +234,26 @@ const saveNotif = async () => {
   }
 };
 
-onMounted(() => {
-  loadRooms();
+onMounted(async () => {
+  await loadRooms();
+  const roomId = Number(route.query.room || 0);
+  if (roomId > 0) {
+    const target = rooms.value.find(item => item.id === roomId);
+    if (target) {
+      await selectRoom(target);
+    }
+  }
   loadNotifConfig();
+  roomRefreshTimer = setInterval(() => {
+    refreshSelectedRoomSilently();
+  }, 5000);
+});
+
+onUnmounted(() => {
+  if (roomRefreshTimer) {
+    clearInterval(roomRefreshTimer);
+    roomRefreshTimer = null;
+  }
 });
 </script>
 
@@ -280,6 +354,10 @@ onMounted(() => {
                       "
                     >
                       {{ msg.message }}
+                      <div v-if="msg.offer_price_twd" class="offer-pill">
+                        議價提案：NT$ {{ Number(msg.offer_price_twd).toLocaleString() }}
+                      </div>
+                      <img v-if="msg.image_url" :src="msg.image_url" alt="msg-image" class="msg-image" />
                     </div>
                   </div>
                   <div
@@ -295,18 +373,28 @@ onMounted(() => {
                   v-if="selectedRoom.status === 'open'"
                   class="reply-area"
                 >
-                  <el-input
-                    v-model="replyText"
-                    placeholder="輸入回覆..."
-                    @keyup.enter.exact="sendReply"
-                  />
-                  <el-button
-                    type="primary"
-                    :loading="replySending"
-                    @click="sendReply"
-                  >
-                    傳送
-                  </el-button>
+                  <div class="reply-aux">
+                    <el-input v-model="replyImageUrl" placeholder="圖片網址（選填）" />
+                    <el-input-number v-model="replyOfferPrice" :min="0" :step="100" placeholder="議價金額" />
+                  </div>
+                  <div class="reply-aux">
+                    <input type="file" accept="image/*" @change="onReplyFileChange" />
+                    <span v-if="replyImageName" class="reply-file-name">已選：{{ replyImageName }}</span>
+                  </div>
+                  <div class="reply-main">
+                    <el-input
+                      v-model="replyText"
+                      placeholder="輸入回覆..."
+                      @keyup.enter.exact="sendReply"
+                    />
+                    <el-button
+                      type="primary"
+                      :loading="replySending"
+                      @click="sendReply"
+                    >
+                      傳送
+                    </el-button>
+                  </div>
                 </div>
                 <div v-else class="closed-notice">此對話已關閉</div>
 
@@ -514,11 +602,47 @@ onMounted(() => {
 }
 .reply-area {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-bottom: 12px;
 }
-.reply-area .el-input {
+
+.reply-main {
+  display: flex;
+  gap: 8px;
+}
+
+.reply-main .el-input {
   flex: 1;
+}
+
+.reply-aux {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.reply-file-name {
+  font-size: 12px;
+  color: #909399;
+}
+
+.offer-pill {
+  margin-top: 6px;
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #fdf6ec;
+  color: #b88230;
+}
+
+.msg-image {
+  margin-top: 6px;
+  max-height: 180px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
 }
 .closed-notice {
   text-align: center;

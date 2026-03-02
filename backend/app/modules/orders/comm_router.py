@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
+import threading
+
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,6 +14,7 @@ from ...core.db import get_db_session
 from ...modules.auth.dependencies import require_role
 from .models import CommRoom, CommMessage, Order
 from .notification import get_config, update_config, send_notification
+from ...core.mailer import build_html_email
 
 router = APIRouter(prefix="/api/v1/admin/comm-rooms", tags=["admin-comm-rooms"])
 
@@ -34,6 +39,7 @@ def _room_to_dict(room: CommRoom, messages: list[CommMessage], order: Order | No
                 "sender_email": m.sender_email,
                 "message": m.message,
                 "image_url": m.image_url,
+                "offer_price_twd": None,
                 "timestamp": m.created_at.isoformat(),
             }
             for m in sorted(messages, key=lambda x: x.id)
@@ -51,6 +57,7 @@ def _mem_room_to_dict(room: dict) -> dict[str, Any]:
             "sender_email": m.get("sender_email", ""),
             "message": m.get("message", ""),
             "image_url": m.get("image_url"),
+            "offer_price_twd": m.get("offer_price_twd"),
             "timestamp": m.get("timestamp", ""),
         })
     sq = room.get("shipping_quote") or {}
@@ -68,6 +75,16 @@ def _mem_room_to_dict(room: dict) -> dict[str, Any]:
         "created_at": room.get("created_at", ""),
         "messages": messages,
     }
+
+
+def _fire_notification(subject: str, body: str, html_body: str | None = None) -> None:
+    def _runner() -> None:
+        try:
+            asyncio.run(send_notification(subject=subject, body=body, html_body=html_body))
+        except Exception:
+            pass
+
+    threading.Thread(target=_runner, daemon=True, name="wakou-comm-notify").start()
 
 
 @router.get("/notification-config")
@@ -137,38 +154,93 @@ def admin_post_message(
     session: Session = Depends(get_db_session),
     current_user=Depends(require_role(["admin", "super_admin", "sales"])),
 ) -> dict:
+    raw_offer = payload.get("offer_price_twd")
+    offer_price_twd = None
+    if raw_offer not in (None, ""):
+        try:
+            offer_price_twd = int(raw_offer)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="invalid offer_price_twd") from exc
+
     room = session.get(CommRoom, room_id)
-    if not room:
-        raise HTTPException(status_code=404, detail="comm room not found")
-    if room.status == "closed":
-        raise HTTPException(status_code=400, detail="comm room is closed")
-    msg = CommMessage(
-        room_id=room_id,
-        sender_email=current_user.email,
-        sender_role=current_user.role,
-        message=str(payload.get("message", "")),
-        image_url=payload.get("image_url"),
-    )
-    session.add(msg)
-    session.commit()
-    session.refresh(msg)
-    # Trigger notification (non-blocking)
-    import asyncio
+    if room:
+        if room.status == "closed":
+            raise HTTPException(status_code=400, detail="comm room is closed")
+        message_text = str(payload.get("message", ""))
+        if offer_price_twd is not None:
+            offer_text = f"[議價提案] NT${offer_price_twd:,}"
+            message_text = f"{message_text}\n{offer_text}".strip()
+
+        msg = CommMessage(
+            room_id=room_id,
+            sender_email=current_user.email,
+            sender_role=current_user.role,
+            message=message_text,
+            image_url=payload.get("image_url"),
+        )
+        session.add(msg)
+        session.commit()
+        session.refresh(msg)
+
+        subject = f"新訊息 — 諮詢室 #{room_id}"
+        body_text = f"來自 {current_user.email}: {msg.message[:100]}"
+        html = build_html_email(
+            subject=subject,
+            preheader="New Admin Message",
+            content="管理員回覆了諮詢室。",
+            fields={"回覆者": current_user.email, "諮詢室": f"#{room_id}", "訊息": msg.message[:100]}
+        )
+
+        _fire_notification(subject=subject, body=body_text, html_body=html)
+        return {
+            "id": msg.id,
+            "from": msg.sender_role,
+            "sender_email": msg.sender_email,
+            "message": msg.message,
+            "image_url": msg.image_url,
+            "offer_price_twd": offer_price_twd,
+            "timestamp": msg.created_at.isoformat(),
+        }
+
+    # Fallback to in-memory COMM_ROOMS for compatibility with legacy/main.py flow
     try:
-        asyncio.create_task(send_notification(
-            subject=f"新訊息 — 諮詢室 #{room_id}",
-            body=f"來自 {current_user.email}: {msg.message[:100]}"
-        ))
-    except RuntimeError:
-        pass  # No event loop in sync context — skip notification
-    return {
-        "id": msg.id,
-        "from": msg.sender_role,
-        "sender_email": msg.sender_email,
-        "message": msg.message,
-        "image_url": msg.image_url,
-        "timestamp": msg.created_at.isoformat(),
-    }
+        from app.main import COMM_ROOMS as _COMM_ROOMS  # type: ignore[import]
+
+        mem_room = _COMM_ROOMS.get(room_id)
+        if not mem_room:
+            raise HTTPException(status_code=404, detail="comm room not found")
+        if mem_room.get("status") == "closed":
+            raise HTTPException(status_code=400, detail="comm room is closed")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        msg_dict = {
+            "id": len(mem_room.get("messages", [])) + 1,
+            "from": "admin",
+            "sender_email": current_user.email,
+            "message": str(payload.get("message", "")),
+            "image_url": payload.get("image_url"),
+            "offer_price_twd": offer_price_twd,
+            "timestamp": now_iso,
+        }
+        mem_room.setdefault("messages", []).append(msg_dict)
+        mem_room["last_admin_reply_at"] = now_iso
+        mem_room["pending_buyer_inquiry"] = False
+
+        subject = f"新訊息 — 諮詢室 #{room_id}"
+        body_text = f"來自 {current_user.email}: {msg_dict['message'][:100]}"
+        html = build_html_email(
+            subject=subject,
+            preheader="New Admin Message",
+            content="管理員回覆了諮詢室。",
+            fields={"回覆者": current_user.email, "諮詢室": f"#{room_id}", "訊息": msg_dict['message'][:100]}
+        )
+
+        _fire_notification(subject=subject, body=body_text, html_body=html)
+        return msg_dict
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="failed to send admin message") from exc
 
 
 @router.patch("/{room_id}/status")
@@ -179,11 +251,24 @@ def admin_set_room_status(
     _user=Depends(require_role(["admin", "super_admin", "sales"])),
 ) -> dict:
     room = session.get(CommRoom, room_id)
-    if not room:
-        raise HTTPException(status_code=404, detail="comm room not found")
     new_status = str(payload.get("status", "")).strip()
     if new_status not in {"open", "closed", "waiting_quote", "quoted", "paid", "completed"}:
         raise HTTPException(status_code=400, detail="invalid status")
-    room.status = new_status
-    session.commit()
-    return {"ok": True, "status": new_status}
+    if room:
+        room.status = new_status
+        session.commit()
+        return {"ok": True, "status": new_status}
+
+    # Fallback to in-memory COMM_ROOMS
+    try:
+        from app.main import COMM_ROOMS as _COMM_ROOMS  # type: ignore[import]
+
+        mem_room = _COMM_ROOMS.get(room_id)
+        if not mem_room:
+            raise HTTPException(status_code=404, detail="comm room not found")
+        mem_room["status"] = new_status
+        return {"ok": True, "status": new_status}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="failed to update room status") from exc

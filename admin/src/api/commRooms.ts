@@ -6,6 +6,7 @@ export type CommMessage = {
   sender_email: string;
   message: string;
   image_url: string | null;
+  offer_price_twd?: number | null;
   timestamp: string;
 };
 
@@ -48,9 +49,12 @@ export const getCommRooms = () =>
 export const getCommRoom = (id: number) =>
   http.request<CommRoom>("get", `/api/v1/admin/comm-rooms/${id}`);
 
-export const postAdminMessage = (id: number, message: string) =>
+export const postAdminMessage = (
+  id: number,
+  payload: { message: string; image_url?: string; offer_price_twd?: number | null }
+) =>
   http.request("post", `/api/v1/admin/comm-rooms/${id}/messages`, {
-    data: { message, from: "admin" }
+    data: payload
   });
 
 export const setRoomStatus = (id: number, status: string) =>

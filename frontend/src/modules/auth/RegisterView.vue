@@ -1,5 +1,5 @@
 <script setup>
-import { reactive, ref } from "vue";
+import { onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "./store";
 
@@ -9,11 +9,55 @@ const store = useAuthStore();
 const form = reactive({
   email: "",
   password: "",
-  role: "buyer"
+  role: "buyer",
+  verification_code: ""
 });
 
 const statusText = ref("");
 const isError = ref(false);
+const codeCooldown = ref(0);
+
+let cooldownTimer = null;
+
+onUnmounted(() => {
+  if (cooldownTimer) {
+    clearInterval(cooldownTimer);
+    cooldownTimer = null;
+  }
+});
+
+function startCooldown(seconds) {
+  codeCooldown.value = Number(seconds) || 60;
+  if (cooldownTimer) {
+    clearInterval(cooldownTimer);
+  }
+  cooldownTimer = setInterval(() => {
+    codeCooldown.value -= 1;
+    if (codeCooldown.value <= 0) {
+      clearInterval(cooldownTimer);
+      cooldownTimer = null;
+      codeCooldown.value = 0;
+    }
+  }, 1000);
+}
+
+async function requestCode() {
+  isError.value = false;
+  statusText.value = "";
+  if (!form.email) {
+    isError.value = true;
+    statusText.value = "Please enter your email first";
+    return;
+  }
+  try {
+    const result = await store.requestRegisterCode({ email: form.email });
+    startCooldown(result.cooldown_seconds || 60);
+    statusText.value = "Verification code sent. Please check your mailbox.";
+  } catch (error) {
+    isError.value = true;
+    statusText.value = error instanceof Error ? error.message : "Request verification code failed";
+  }
+}
 
 async function submitRegister() {
   isError.value = false;
@@ -62,6 +106,30 @@ async function submitRegister() {
             placeholder="••••••••" 
             required
           />
+        </div>
+
+        <div class="form-group">
+          <label for="verification-code">Verification Code</label>
+          <div class="code-row">
+            <input
+              id="verification-code"
+              v-model="form.verification_code"
+              class="field"
+              type="text"
+              inputmode="numeric"
+              maxlength="6"
+              placeholder="6-digit code"
+              required
+            />
+            <button
+              class="btn btn-secondary code-btn"
+              type="button"
+              :disabled="codeCooldown > 0"
+              @click="requestCode"
+            >
+              {{ codeCooldown > 0 ? `Resend (${codeCooldown}s)` : "Send Code" }}
+            </button>
+          </div>
         </div>
 
         <div class="form-group">
@@ -138,6 +206,17 @@ async function submitRegister() {
 .submit-btn {
   margin-top: 1rem;
   width: 100%;
+}
+
+.code-row {
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: 1fr auto;
+}
+
+.code-btn {
+  min-width: 124px;
+  white-space: nowrap;
 }
 
 .auth-footer {

@@ -10,6 +10,11 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     role: RoleLiteral
+    verification_code: str
+
+
+class RegisterCodeRequest(BaseModel):
+    email: EmailStr
 
 
 class LoginRequest(BaseModel):

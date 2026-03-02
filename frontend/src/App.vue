@@ -70,7 +70,7 @@
           <div class="social-row">
             <a
               class="social-link"
-              href="https://www.instagram.com/"
+              href="https://www.instagram.com/wakou_vintage_select?igsh=MWFzZzIzcDltamVpZA%3D%3D&utm_source=qr"
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Instagram"

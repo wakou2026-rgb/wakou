@@ -1,7 +1,13 @@
+from datetime import datetime, timedelta, timezone
+import os
+import random
+from typing import Any
+
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ...core.mailer import build_html_email, send_email
 from .models import User
 from .security import (
     create_access_token,
@@ -19,6 +25,84 @@ def _normalize_login_email(raw_email: str) -> str:
     return f"{trimmed}@wakou-demo.com"
 
 
+_REGISTRATION_CODES: dict[str, dict[str, Any]] = {}
+_REGISTER_CODE_TTL_SECONDS = int(os.getenv("REGISTER_CODE_TTL_SECONDS", "600"))
+_REGISTER_CODE_COOLDOWN_SECONDS = int(os.getenv("REGISTER_CODE_COOLDOWN_SECONDS", "60"))
+_REGISTER_CODE_MAX_ATTEMPTS = int(os.getenv("REGISTER_CODE_MAX_ATTEMPTS", "5"))
+_REGISTER_CODE_DEV_EXPOSE = os.getenv("AUTH_EMAIL_DEV_EXPOSE_CODE", "1") == "1"
+_ADMIN_NOTIFY_EMAIL = os.getenv("NOTIFY_TO_EMAIL", "").strip()
+
+
+def send_register_verification_code(email: str) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    existing = _REGISTRATION_CODES.get(email)
+    sent_at = existing.get("sent_at") if existing else None
+    if isinstance(sent_at, datetime):
+        elapsed = (now - sent_at).total_seconds()
+        if elapsed < _REGISTER_CODE_COOLDOWN_SECONDS:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Please wait {int(_REGISTER_CODE_COOLDOWN_SECONDS - elapsed)} seconds before requesting a new code",
+            )
+
+    code = f"{random.SystemRandom().randint(0, 999999):06d}"
+    expires_at = now + timedelta(seconds=_REGISTER_CODE_TTL_SECONDS)
+    _REGISTRATION_CODES[email] = {
+        "code": code,
+        "sent_at": now,
+        "expires_at": expires_at,
+        "attempts": 0,
+    }
+
+    subject = "和光精選註冊驗證碼"
+    body = (
+        "您好，\n\n"
+        f"您的註冊驗證碼為：{code}\n"
+        f"此驗證碼將在 {_REGISTER_CODE_TTL_SECONDS // 60} 分鐘後失效。\n"
+        "若非本人操作，請忽略此郵件。\n\n"
+        "和光精選"
+    )
+
+    html = build_html_email(
+        subject=subject,
+        preheader="帳號註冊驗證",
+        content="感謝您選擇和光精選！為了確保您的帳號安全，請使用下方的驗證碼完成註冊流程：",
+        fields={"驗證碼": code, "有效期限": f"{_REGISTER_CODE_TTL_SECONDS // 60} 分鐘"}
+    )
+    send_email(email, subject, body, html_body=html)
+
+    result: dict[str, object] = {
+        "ok": True,
+        "expires_in_seconds": _REGISTER_CODE_TTL_SECONDS,
+        "cooldown_seconds": _REGISTER_CODE_COOLDOWN_SECONDS,
+    }
+    if _REGISTER_CODE_DEV_EXPOSE:
+        result["dev_code"] = code
+    return result
+
+
+def verify_register_verification_code(email: str, verification_code: str) -> None:
+    entry = _REGISTRATION_CODES.get(email)
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification code not requested")
+
+    now = datetime.now(timezone.utc)
+    expires_at = entry.get("expires_at")
+    if not isinstance(expires_at, datetime) or now > expires_at:
+        _REGISTRATION_CODES.pop(email, None)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification code expired")
+
+    expected = str(entry.get("code", ""))
+    if expected != verification_code.strip():
+        attempts = int(entry.get("attempts", 0)) + 1
+        entry["attempts"] = attempts
+        if attempts >= _REGISTER_CODE_MAX_ATTEMPTS:
+            _REGISTRATION_CODES.pop(email, None)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification code")
+
+    _REGISTRATION_CODES.pop(email, None)
+
+
 def register_user(session: Session, email: str, password: str, role: str) -> User:
     existing = session.scalar(select(User).where(User.email == email))
     if existing:
@@ -28,6 +112,25 @@ def register_user(session: Session, email: str, password: str, role: str) -> Use
     session.add(user)
     session.commit()
     session.refresh(user)
+
+    if _ADMIN_NOTIFY_EMAIL:
+        now_str = datetime.now(timezone.utc).isoformat()
+        body = f"email: {user.email}\nrole: {user.role}\nregistered_at: {now_str}"
+        html = build_html_email(
+            subject="[Wakou] 新用戶註冊通知",
+            preheader="New User Registration",
+            fields={
+                "使用者信箱": user.email,
+                "權限角色": user.role,
+                "註冊時間": now_str,
+            }
+        )
+        send_email(
+            _ADMIN_NOTIFY_EMAIL,
+            "[Wakou] 新用戶註冊通知",
+            body,
+            html_body=html
+        )
     return user
 
 

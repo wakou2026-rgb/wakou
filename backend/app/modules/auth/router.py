@@ -14,6 +14,7 @@ from .schemas import (
     AccessTokenResponse,
     AdminLoginRequest,
     LoginRequest,
+    RegisterCodeRequest,
     MeResponse,
     RefreshRequest,
     RegisterRequest,
@@ -26,7 +27,13 @@ from .security import (
     decode_token,
     verify_password,
 )
-from .service import login_user, refresh_access_token, register_user
+from .service import (
+    login_user,
+    refresh_access_token,
+    register_user,
+    send_register_verification_code,
+    verify_register_verification_code,
+)
 
 auth_router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 admin_router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -67,7 +74,13 @@ class _PureAdminRefreshRequest(BaseModel):
 
 @auth_router.post("/register", status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, session: Session = Depends(get_db_session)) -> None:
+    verify_register_verification_code(payload.email, payload.verification_code)
     register_user(session=session, email=payload.email, password=payload.password, role=payload.role)
+
+
+@auth_router.post("/register/request-code", status_code=status.HTTP_200_OK)
+def request_register_code(payload: RegisterCodeRequest) -> dict[str, Any]:
+    return send_register_verification_code(str(payload.email))
 
 
 @auth_router.post("/login", response_model=TokenResponse)
@@ -167,5 +180,4 @@ def admin_async_routes(
     # Return empty array - static routes in frontend are sufficient
     # This prevents duplicate menu items when combined with static routes
     return {"success": True, "data": []}
-
 

@@ -55,7 +55,29 @@ export const postCommMessage = (roomId: number, message: string) =>
     data: { message, from: "admin" }
   });
 
+export const postCommMessageRich = (
+  roomId: number,
+  payload: { message: string; image_url?: string; offer_price_twd?: number | null }
+) =>
+  http.request("post", `/api/v1/admin/comm-rooms/${roomId}/messages`, {
+    data: payload
+  });
+
 export const setCommRoomStatus = (roomId: number, status: string) =>
   http.request("patch", `/api/v1/admin/comm-rooms/${roomId}/status`, {
     data: { status }
+  });
+
+export const setFinalQuote = (
+  roomId: number,
+  payload: {
+    final_price_twd: number;
+    shipping_fee_twd: number;
+    discount_twd?: number;
+    shipping_carrier?: string;
+    tracking_number?: string;
+  }
+) =>
+  http.request("post", `/api/v1/comm-rooms/${roomId}/final-quote`, {
+    data: payload
   });

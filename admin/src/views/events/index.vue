@@ -15,7 +15,12 @@ const loadData = async (showLoading = true) => {
   try {
     if (showLoading) loading.value = true;
     const res = await getEvents();
-    events.value = Array.isArray(res) ? res : ((res as any).data || []);
+    const payload = (res as any)?.data ?? res;
+    events.value = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.items)
+        ? payload.items
+        : [];
   } catch (error: any) {
     ElMessage.error(error?.message || "無法載入系統日誌");
   } finally {
@@ -59,13 +64,19 @@ onUnmounted(() => {
 
       <el-table :data="events" v-loading="loading" style="width: 100%" border>
         <el-table-column prop="id" label="ID" width="80" />
-        <el-table-column prop="actor" label="操作者" width="200" />
-        <el-table-column prop="action" label="動作" width="150">
+        <el-table-column prop="actor_email" label="操作者" width="220" />
+        <el-table-column prop="event_type" label="事件類型" width="220">
           <template #default="{ row }">
-            <el-tag size="small">{{ row.action }}</el-tag>
+            <el-tag size="small">{{ row.event_type || "-" }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="target" label="目標" />
+        <el-table-column label="內容">
+          <template #default="{ row }">
+            <div class="font-semibold">{{ row.title || "-" }}</div>
+            <div class="text-xs text-gray-500">{{ row.detail || "" }}</div>
+            <div class="text-xs text-gray-400">Order #{{ row.order_id ?? "-" }} · Room #{{ row.room_id ?? "-" }}</div>
+          </template>
+        </el-table-column>
         <el-table-column prop="created_at" label="時間" width="180">
           <template #default="{ row }">
             {{ new Date(row.created_at).toLocaleString() }}

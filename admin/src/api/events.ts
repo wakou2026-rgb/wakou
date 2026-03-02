@@ -2,9 +2,13 @@ import { http } from "@/utils/http";
 
 export type Event = {
   id: number;
-  actor: string;
-  action: string;
-  target: string;
+  actor_email?: string;
+  actor_role?: string;
+  event_type?: string;
+  title?: string;
+  detail?: string;
+  order_id?: number | null;
+  room_id?: number | null;
   created_at: string;
 };
 
