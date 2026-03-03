@@ -32,7 +32,6 @@ RateLimitExceeded = slowapi_errors_module.RateLimitExceeded
 
 from app.core.bootstrap import (  # noqa: E402
     _run_migrations as _run_migrations_impl,
-    _seed_demo_data as _seed_demo_data_impl,
     _start_inquiry_reminder_worker as _start_inquiry_reminder_worker_impl,
     bootstrap_state,
 )
@@ -86,10 +85,6 @@ app.include_router(wishlist_router_module.wishlist_router)
 def _run_migrations() -> None:
     _run_migrations_impl()
 
-
-@app.on_event("startup")
-def _seed_demo_data() -> None:
-    _seed_demo_data_impl()
 
 
 @app.on_event("startup")
