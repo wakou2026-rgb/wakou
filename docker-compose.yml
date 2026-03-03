@@ -1,3 +1,5 @@
+name: wakou
+
 services:
   frontend:
     container_name: wakou-frontend

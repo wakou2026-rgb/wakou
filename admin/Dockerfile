@@ -1,4 +1,4 @@
-FROM node:20-alpine as build-stage
+FROM node:22-alpine as build-stage
 
 WORKDIR /app
 RUN corepack enable
@@ -12,7 +12,7 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
 
-FROM alpine:3.19 as production-stage
+FROM alpine:3.21 as production-stage
 
 COPY --from=build-stage /app/dist /dist
 
