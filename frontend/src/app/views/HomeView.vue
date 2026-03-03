@@ -63,7 +63,7 @@ onMounted(async () => {
       magazines.value = normalizeMagazines(magResult.value).slice(0, 1);
     }
     if (catalogResult.status === "fulfilled") {
-      newArrivals.value = (Array.isArray(catalogResult.value) ? catalogResult.value : []).slice(0, 4);
+      newArrivals.value = (catalogResult.value?.items || []).slice(0, 4);
     }
   } catch {
     magazines.value = [];

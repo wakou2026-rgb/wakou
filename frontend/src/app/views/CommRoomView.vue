@@ -57,7 +57,7 @@ async function loadRoom() {
 }
 
 async function sendChat() {
-  if (!messageForm.message.trim() && !messageForm.image_url.trim()) return;
+  if (!messageForm.message.trim() && !messageForm.image_url.trim() && !messageForm.offer_price_twd) return;
   isProcessing.value = true;
   isError.value = false;
   try {
@@ -516,8 +516,8 @@ onUnmounted(() => {
 }
 
 .msg-buyer .msg-bubble {
-  background: var(--ink-800);
-  color: white;
+  background: var(--paper-300);
+  color: var(--ink-900);
 }
 
 .msg-text {
@@ -565,7 +565,7 @@ onUnmounted(() => {
 }
 
 .msg-buyer .time-meta {
-  color: rgba(255,255,255,0.6);
+  color: var(--ink-500);
 }
 
 .system-text {
