@@ -1,3 +1,5 @@
+import { handleUnauthorizedResponse } from "../auth/session";
+
 let nextOrderId = 1;
 let nextRoomId = 1;
 
@@ -41,6 +43,9 @@ export async function createOrder(payload) {
     })
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error("create order failed");
   }
   return response.json();

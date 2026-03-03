@@ -1,5 +1,5 @@
 <script setup>
-import { onUnmounted, reactive, ref } from "vue";
+import { computed, onUnmounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAuthStore } from "./store";
 import { useI18n } from "vue-i18n";
@@ -18,8 +18,26 @@ const form = reactive({
 const statusText = ref("");
 const isError = ref(false);
 const codeCooldown = ref(0);
+const canSubmit = computed(() => /^\d{6}$/.test(form.verification_code));
 
 let cooldownTimer = null;
+
+function normalizeVerificationCode() {
+  form.verification_code = form.verification_code
+    .normalize("NFKC")
+    .replace(/\D/g, "")
+    .slice(0, 6);
+}
+
+function onVerificationCodePaste(event) {
+  const raw = event.clipboardData?.getData("text") || "";
+  const normalized = raw.normalize("NFKC").replace(/\D/g, "").slice(0, 6);
+  if (!normalized) {
+    return;
+  }
+  event.preventDefault();
+  form.verification_code = normalized;
+}
 
 onUnmounted(() => {
   if (cooldownTimer) {
@@ -64,6 +82,12 @@ async function requestCode() {
 async function submitRegister() {
   isError.value = false;
   statusText.value = "";
+  normalizeVerificationCode();
+  if (!/^\d{6}$/.test(form.verification_code)) {
+    isError.value = true;
+    statusText.value = t("auth.code_format_invalid");
+    return;
+  }
   try {
     await store.register(form);
     statusText.value = t('auth.register_success');
@@ -124,6 +148,8 @@ async function submitRegister() {
               maxlength="6"
               :placeholder="$t('auth.code_placeholder')"
               :aria-label="$t('auth.verify_code_label')"
+              @input="normalizeVerificationCode"
+              @paste="onVerificationCodePaste"
               required
             />
             <button
@@ -138,15 +164,7 @@ async function submitRegister() {
           </div>
         </div>
 
-        <div class="form-group">
-          <label for="role">{{ $t('auth.account_type') }}</label>
-          <select id="role" v-model="form.role" class="field select-styled" :aria-label="$t('auth.account_type')">
-            <option value="buyer">{{ $t('auth.role_buyer') }}</option>
-            <option value="admin">{{ $t('auth.role_admin') }}</option>
-          </select>
-        </div>
-        
-        <button class="btn btn-primary submit-btn" type="submit" :aria-label="$t('auth.register_btn')">{{ $t('auth.register_btn') }}</button>
+        <button class="btn btn-primary submit-btn" type="submit" :disabled="!canSubmit" :aria-label="$t('auth.register_btn')">{{ $t('auth.register_btn') }}</button>
         
         <div class="auth-footer">
           <p v-if="statusText" :class="isError ? 'status-err' : 'status-ok'">
@@ -212,6 +230,11 @@ async function submitRegister() {
 .submit-btn {
   margin-top: 1rem;
   width: 100%;
+}
+
+.submit-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .code-row {

@@ -1,3 +1,5 @@
+import { handleUnauthorizedResponse } from "../auth/session";
+
 function getAccessToken() {
   if (typeof window === "undefined") {
     return "";
@@ -25,6 +27,9 @@ export async function getWishlist() {
     headers: authHeaders()
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error(`load wishlist failed (${response.status})`);
   }
   const data = await response.json();
@@ -37,6 +42,9 @@ export async function getWishlistProducts() {
     headers: authHeaders()
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error(`load wishlist products failed (${response.status})`);
   }
   const data = await response.json();
@@ -49,6 +57,9 @@ export async function addToWishlist(productId) {
     headers: authHeaders()
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error(`add to wishlist failed (${response.status})`);
   }
   return response.json();
@@ -60,6 +71,9 @@ export async function removeFromWishlist(productId) {
     headers: authHeaders()
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error(`remove from wishlist failed (${response.status})`);
   }
   return response.json();

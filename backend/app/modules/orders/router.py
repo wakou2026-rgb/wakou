@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 import app.core.state as state_mod
@@ -25,8 +26,9 @@ from ...core.helpers import (
 from ...core.mailer import build_html_email
 from ...core.schemas import AdminOrderStatusPayload, FinalQuotePayload, OrderPayload, TransferProofPayload
 from ...modules.auth.dependencies import require_role
+from ...modules.auth.models import User
 from .schemas import OrderBulkStatusPayload, OrderRefundPayload
-from .service import update_order_status
+from .service import create_order_with_room, get_order, list_orders, list_orders_for_buyer, update_order_status
 
 router = APIRouter(prefix="/api/v1/admin/orders", tags=["admin-orders"])
 buyer_router = APIRouter(tags=["orders"])
@@ -106,26 +108,31 @@ def _update_order_status_fallback(
 
 
 @buyer_router.post("/api/v1/orders", status_code=201)
-def create_order(payload: OrderPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def create_order(
+    payload: OrderPayload,
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
+    _require_roles(user, {"buyer"})
     if payload.mode not in {"inquiry", "buy_now"}:
         raise HTTPException(status_code=400, detail="invalid mode")
     if next((item for item in state_mod.PRODUCTS if item["id"] == payload.product_id), None) is None:
         raise HTTPException(status_code=404, detail="product not found")
 
-    max_order_id = max(state_mod.ORDERS.keys(), default=0)
-    if state_mod.next_order_id <= max_order_id:
-        state_mod.next_order_id = max_order_id + 1
-    max_room_id = max(state_mod.COMM_ROOMS.keys(), default=0)
-    if state_mod.next_room_id <= max_room_id:
-        state_mod.next_room_id = max_room_id + 1
-
-    order_id = state_mod.next_order_id
-    state_mod.next_order_id += 1
-    room_id = state_mod.next_room_id
-    state_mod.next_room_id += 1
-
     status = "inquiring" if payload.mode == "inquiry" else "buyer_confirmed"
     product = next((item for item in state_mod.PRODUCTS if item["id"] == payload.product_id), None)
+
+    db_order, db_room = create_order_with_room(
+        session=session,
+        buyer_email=user["email"],
+        product_id=payload.product_id,
+        mode=payload.mode,
+        product_name=product["name"]["zh-Hant"] if product else "",
+        amount_twd=int(product["price_twd"]) if product else 0,
+    )
+    order_id = int(db_order.id)
+    room_id = int(db_room.id)
+
     state_mod.COMM_ROOMS[room_id] = {
         "id": room_id,
         "buyer_email": user["email"],
@@ -228,7 +235,29 @@ def create_order(payload: OrderPayload, user: dict = Depends(_get_user_dict)) ->
 
 
 @buyer_router.get("/api/v1/orders/me")
-def my_orders(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
+def my_orders(
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, list[dict[str, Any]]]:
+    db_orders = list_orders_for_buyer(session, user["email"])
+    if db_orders:
+        return {
+            "items": [
+                {
+                    "id": item.id,
+                    "buyer_email": item.buyer_email,
+                    "product_id": item.product_id,
+                    "product_name": item.product_name,
+                    "status": item.status,
+                    "amount_twd": item.amount_twd,
+                    "final_amount_twd": item.final_amount_twd,
+                    "comm_room_id": item.comm_room_id,
+                    "created_at": item.created_at.isoformat(),
+                }
+                for item in db_orders
+            ]
+        }
+
     items = [
         order
         for order in state_mod.ORDERS.values()
@@ -239,15 +268,42 @@ def my_orders(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, 
 
 
 @buyer_router.post("/api/v1/orders/{order_id}/confirm-payment")
-def confirm_manual_payment(order_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def confirm_manual_payment(
+    order_id: int,
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
     _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
-    order = state_mod.ORDERS.get(order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="order not found")
-    if order["status"] != "proof_uploaded":
-        raise HTTPException(status_code=400, detail="invalid order state")
+
+    db_order = get_order(session, order_id)
+    if db_order is not None:
+        if db_order.status != "proof_uploaded":
+            raise HTTPException(status_code=400, detail="invalid order state")
+        order = state_mod.ORDERS.get(order_id)
+        if order is None:
+            order = {
+                "id": int(db_order.id),
+                "buyer_email": str(db_order.buyer_email),
+                "product_name": str(db_order.product_name or ""),
+                "amount_twd": int(db_order.amount_twd or 0),
+                "final_amount_twd": int(db_order.final_amount_twd or db_order.amount_twd or 0),
+                "status": "proof_uploaded",
+                "comm_room_id": int(db_order.comm_room_id or 0),
+                "created_at": db_order.created_at.isoformat(),
+            }
+            state_mod.ORDERS[order_id] = order
+        else:
+            order["status"] = "proof_uploaded"
+    else:
+        order = state_mod.ORDERS.get(order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="order not found")
+        if order["status"] != "proof_uploaded":
+            raise HTTPException(status_code=400, detail="invalid order state")
 
     order["status"] = "paid"
+    if db_order is not None:
+        update_order_status(session, order_id, "paid")
     room_id = order.get("comm_room_id")
     if room_id and room_id in state_mod.COMM_ROOMS:
         state_mod.COMM_ROOMS[room_id].setdefault("messages", []).append(
@@ -317,7 +373,11 @@ def confirm_manual_payment(order_id: int, user: dict = Depends(_get_user_dict)) 
 
 
 @buyer_router.post("/api/v1/orders/{order_id}/complete")
-def complete_order(order_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def complete_order(
+    order_id: int,
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
     _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
     order = state_mod.ORDERS.get(order_id)
     if order is None:
@@ -328,6 +388,10 @@ def complete_order(order_id: int, user: dict = Depends(_get_user_dict)) -> dict[
         return {"ok": True, "status": "completed"}
 
     order["status"] = "completed"
+    try:
+        update_order_status(session, order_id, "completed")
+    except ValueError:
+        pass
     total_spent = _user_total_spent(order["buyer_email"])
     membership = _resolve_membership(total_spent)
     earned_points = int(
@@ -373,21 +437,70 @@ def admin_console_config(user: dict = Depends(_get_user_dict)) -> dict[str, Any]
 
 
 @buyer_router.get("/api/v1/admin/overview")
-def admin_overview(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def admin_overview(user: dict = Depends(_get_user_dict), session: Session = Depends(get_db_session)) -> dict[str, Any]:
     _require_roles(user, state_mod.PRODUCT_ADMIN_ROLES | state_mod.ORDER_ADMIN_ROLES)
-    orders = sorted(state_mod.ORDERS.values(), key=lambda item: item["id"], reverse=True)
+    from ...modules.products.models import Product
+    from .models import Order as OrderModel
+    db_orders = list(session.scalars(select(OrderModel).order_by(OrderModel.id.desc())))
+    pending_statuses = {"waiting_quote", "buyer_confirmed", "inquiring"}
+    paid_statuses = {"paid", "completed", "shipped"}
+    revenue = sum(
+        (o.final_amount_twd if o.final_amount_twd is not None else o.amount_twd)
+        for o in db_orders if o.status in paid_statuses
+    )
+    active_products = session.scalar(select(__import__('sqlalchemy').func.count(Product.id)).where(Product.availability == "available")) or 0
     metrics = {
-        "total_products": len(state_mod.PRODUCTS),
-        "total_orders": len(orders),
-        "pending_orders": len([item for item in orders if item["status"] in {"waiting_quote", "buyer_confirmed"}]),
-        "active_rooms": len(state_mod.COMM_ROOMS),
+        "total_orders": len(db_orders),
+        "pending_orders": sum(1 for o in db_orders if o.status in pending_statuses),
+        "revenue": revenue,
+        "active_products": active_products,
     }
-    return {"metrics": metrics, "recent_orders": orders[:8]}
+    recent = [
+        {
+            "id": o.id,
+            "buyer_email": o.buyer_email,
+            "product_name": o.product_name,
+            "status": o.status,
+            "amount_twd": o.final_amount_twd if o.final_amount_twd is not None else o.amount_twd,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+        }
+        for o in db_orders[:8]
+    ]
+    return {"metrics": metrics, "recent_orders": recent}
 
 
 @router.get("")
-def admin_orders(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def admin_orders(
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
     _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
+
+    db_orders = list_orders(session)
+    if db_orders:
+        buyer_emails = list({str(item.buyer_email) for item in db_orders if item.buyer_email})
+        role_by_email: dict[str, str] = {}
+        if buyer_emails:
+            rows = session.execute(select(User.email, User.role).where(User.email.in_(buyer_emails))).all()
+            role_by_email = {str(email): str(role) for email, role in rows}
+
+        results = [
+            {
+                "id": item.id,
+                "buyer_email": item.buyer_email,
+                "product_name": item.product_name,
+                "status": item.status,
+                "mode": "inquiry",
+                "comm_room_id": item.comm_room_id,
+                "amount_twd": item.amount_twd,
+                "final_amount_twd": item.final_amount_twd if item.final_amount_twd is not None else item.amount_twd,
+                "created_at": item.created_at.isoformat(),
+            }
+            for item in db_orders
+            if role_by_email.get(str(item.buyer_email), "buyer") == "buyer"
+        ]
+        return {"items": results, "total": len(results)}
+
     results = []
     for item in sorted(state_mod.ORDERS.values(), key=lambda x: x["id"], reverse=True):
         results.append(

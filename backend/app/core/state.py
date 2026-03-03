@@ -31,31 +31,8 @@ next_review_id = 1
 next_cost_id = 1
 next_revenue_id = 1
 next_event_id = 1
-ORDERS: dict[int, dict[str, Any]] = {
-    1: {
-        "id": 1,
-        "buyer_email": "user@wakou-demo.com",
-        "product_id": 1,
-        "product_name": "鐘錶 1",
-        "mode": "inquiry",
-        "status": "waiting_quote",
-        "comm_room_id": 1,
-        "created_at": "2026-02-23T10:00:00Z",
-    }
-}
-COMM_ROOMS: dict[int, dict[str, Any]] = {
-    1: {
-        "id": 1,
-        "order_id": 1,
-        "buyer_email": "user@wakou-demo.com",
-        "product_id": 1,
-        "product_name": "鐘錶 1",
-        "messages": [
-            {"role": "system", "content": "room created"}
-        ],
-        "created_at": "2026-02-23T10:00:00Z",
-    }
-}
+ORDERS: dict[int, dict[str, Any]] = {}
+COMM_ROOMS: dict[int, dict[str, Any]] = {}
 WISHLISTS: dict[str, list[str]] = {}
 USER_DISPLAY_NAMES: dict[str, str] = {}
 EVENT_LOGS: list[dict[str, Any]] = []

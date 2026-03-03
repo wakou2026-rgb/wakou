@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted } from "vue";
 import { getUsers, getBuyerHistory, addBuyerNote, awardBuyerPoints, banUser, changeUserRole, getCommRoom, postCommMessageRich, setCommRoomStatus, setFinalQuote, type User, type BuyerHistory } from "@/api/crm";
 import { ElMessage } from "element-plus";
+import { normalizeMediaUrl } from "@/utils/mediaUrl";
 
 defineOptions({
   name: "CRMIndex"
@@ -28,6 +29,14 @@ const chatImageUrl = ref("");
 const chatImageName = ref("");
 const chatOfferPrice = ref<number | null>(null);
 const chatMessages = ref<any[]>([]);
+
+const displayProofUrl = () => {
+  const roomProof = chatRoom.value?.transfer_proof_url;
+  const orderProof = chatRoom.value?.order?.transfer_proof_url;
+  return normalizeMediaUrl(roomProof) || normalizeMediaUrl(orderProof) || "";
+};
+
+const displayMessageImageUrl = (imageUrl?: string | null) => normalizeMediaUrl(imageUrl || "");
 
 const quoteForm = ref({
   final_price_twd: 0,
@@ -393,6 +402,23 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <div v-if="displayProofUrl()" class="mb-3 rounded border border-emerald-200 bg-emerald-50 p-3">
+          <div class="mb-2 text-xs font-semibold text-emerald-800">買家匯款證明</div>
+          <a
+            :href="displayProofUrl()"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center gap-1 text-xs text-emerald-700 underline"
+          >
+            開新分頁檢視原圖
+          </a>
+          <img
+            :src="displayProofUrl()"
+            alt="transfer proof"
+            class="mt-2 max-h-56 rounded border border-emerald-200"
+          />
+        </div>
+
         <div class="flex-1 overflow-y-auto p-4 bg-gray-50 border border-gray-200 rounded-lg mb-4 flex flex-col gap-4 relative shadow-inner">
           <div
             v-for="(msg, idx) in chatMessages"
@@ -416,12 +442,20 @@ onUnmounted(() => {
               <div v-if="msg.offer_price_twd" class="mt-2 inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
                 議價提案：NT$ {{ Number(msg.offer_price_twd).toLocaleString() }}
               </div>
-              <img
-                v-if="msg.image_url"
-                :src="msg.image_url"
-                alt="message image"
-                class="mt-2 max-h-48 rounded border border-gray-200"
-              />
+              <a
+                v-if="displayMessageImageUrl(msg.image_url)"
+                :href="displayMessageImageUrl(msg.image_url)"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="mt-2 block"
+              >
+                <img
+                  :src="displayMessageImageUrl(msg.image_url)"
+                  alt="message image"
+                  class="max-h-48 rounded border border-gray-200"
+                />
+                <span class="mt-1 block text-[11px] text-gray-500 underline">檢視原圖</span>
+              </a>
             </div>
           </div>
           <div v-if="chatMessages.length === 0" class="absolute inset-0 flex items-center justify-center text-gray-400">

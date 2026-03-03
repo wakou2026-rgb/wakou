@@ -12,6 +12,7 @@ from .models import Category
 
 public_router = APIRouter(prefix="/api/v1/categories", tags=["categories"])
 admin_router = APIRouter(prefix="/api/v1/admin/categories", tags=["admin-categories"])
+FIXED_CATEGORY_IDS = {"watch", "bag", "jewelry", "apparel", "lifestyle", "accessory"}
 
 
 def _row_to_dict(cat: Category) -> dict[str, Any]:
@@ -43,30 +44,11 @@ def admin_list_categories(
 
 @admin_router.post("", status_code=201)
 def admin_create_category(
-    payload: dict,
-    session: Session = Depends(get_db_session),
+    _payload: dict,
+    _session: Session = Depends(get_db_session),
     _user=Depends(require_role(["admin", "super_admin"])),
 ) -> dict:
-    cat_id = str(payload.get("id", "")).strip()
-    if not cat_id:
-        raise HTTPException(status_code=400, detail="id is required")
-    existing = session.get(Category, cat_id)
-    if existing:
-        raise HTTPException(status_code=409, detail="category already exists")
-    title = payload.get("title", {})
-    cat = Category(
-        id=cat_id,
-        title_zh=title.get("zh-Hant", ""),
-        title_ja=title.get("ja", ""),
-        title_en=title.get("en", ""),
-        image_url=str(payload.get("image", "")),
-        sort_order=int(payload.get("sort_order", 0)),
-        is_active=bool(payload.get("is_active", True)),
-    )
-    session.add(cat)
-    session.commit()
-    session.refresh(cat)
-    return _row_to_dict(cat)
+    raise HTTPException(status_code=403, detail="Categories are fixed and cannot be created")
 
 
 @admin_router.patch("/{cat_id}")
@@ -104,6 +86,8 @@ def admin_delete_category(
     session: Session = Depends(get_db_session),
     _user=Depends(require_role(["admin", "super_admin"])),
 ) -> dict:
+    if cat_id in FIXED_CATEGORY_IDS:
+        raise HTTPException(status_code=403, detail="Fixed categories cannot be deleted")
     cat = session.get(Category, cat_id)
     if not cat:
         raise HTTPException(status_code=404, detail="category not found")

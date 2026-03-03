@@ -8,8 +8,10 @@ import {
   submitFinalQuote, 
   acceptQuote, 
   uploadTransferProof,
+  uploadTransferProofFile,
   confirmPayment
 } from "../../modules/comm-room/service";
+import { normalizeMediaUrl } from "../../modules/comm-room/media-url";
 import { useAuthStore } from "../../modules/auth/store";
 
 const route = useRoute();
@@ -37,6 +39,11 @@ const quoteForm = reactive({
 const proofForm = reactive({
   transfer_proof_url: ""
 });
+const selectedProofFile = ref(null);
+const selectedProofFileName = ref("");
+const normalizedProofUrl = computed(() =>
+  normalizeMediaUrl(room.value?.order?.transfer_proof_url || room.value?.transfer_proof_url || "")
+);
 
 const isProcessing = ref(false);
 let refreshTimer = null;
@@ -141,11 +148,18 @@ async function handleAcceptQuote() {
 }
 
 async function submitProof() {
-  if (!proofForm.transfer_proof_url.trim()) return;
+  if (!proofForm.transfer_proof_url.trim() && !selectedProofFile.value) return;
   isProcessing.value = true;
   isError.value = false;
   try {
-    await uploadTransferProof(route.params.id, { transfer_proof_url: proofForm.transfer_proof_url });
+    if (selectedProofFile.value) {
+      const uploaded = await uploadTransferProofFile(route.params.id, selectedProofFile.value);
+      proofForm.transfer_proof_url = uploaded.transfer_proof_url || "";
+      selectedProofFile.value = null;
+      selectedProofFileName.value = "";
+    } else {
+      await uploadTransferProof(route.params.id, { transfer_proof_url: proofForm.transfer_proof_url });
+    }
     statusText.value = t("comm_room.proof_uploaded_msg");
     await loadRoom();
   } catch (error) {
@@ -154,6 +168,24 @@ async function submitProof() {
   } finally {
     isProcessing.value = false;
   }
+}
+
+function handleProofFileChange(event) {
+  const file = event?.target?.files?.[0];
+  if (!file) {
+    selectedProofFile.value = null;
+    selectedProofFileName.value = "";
+    return;
+  }
+  if (!file.type.startsWith("image/")) {
+    isError.value = true;
+    statusText.value = "請選擇圖片檔案";
+    selectedProofFile.value = null;
+    selectedProofFileName.value = "";
+    return;
+  }
+  selectedProofFile.value = file;
+  selectedProofFileName.value = file.name;
 }
 
 async function handleConfirmPayment() {
@@ -175,6 +207,10 @@ function formatDate(isoString) {
   if (!isoString) return "";
   const date = new Date(isoString);
   return date.toLocaleString();
+}
+
+function messageImageUrl(message) {
+  return normalizeMediaUrl(message?.image_url || "");
 }
 
 onMounted(async () => {
@@ -260,8 +296,8 @@ onUnmounted(() => {
               <div v-else class="msg-bubble">
                 <p v-if="msg.message" class="msg-text">{{ msg.message }}</p>
                 <div v-if="msg.offer_price_twd" class="offer-tag">議價提案：NT$ {{ Number(msg.offer_price_twd).toLocaleString() }}</div>
-                <div v-if="msg.image_url" class="msg-image-wrap">
-                  <img :src="msg.image_url" alt="Attached image" class="msg-image" />
+                <div v-if="messageImageUrl(msg)" class="msg-image-wrap">
+                  <img :src="messageImageUrl(msg)" alt="Attached image" class="msg-image" />
                   <div v-if="msg.from === 'admin'" class="cert-badge">{{ $t('comm_room.cert_badge') }}</div>
                 </div>
                 <span class="time-meta">{{ formatDate(msg.timestamp) }}</span>
@@ -322,7 +358,9 @@ onUnmounted(() => {
           </div>
           <p class="meta mt-2 mb-2">{{ $t('comm_room.upload_hint') }}</p>
           <div class="form-group">
-            <input v-model="proofForm.transfer_proof_url" class="field" type="text" placeholder="https://... (圖片網址)" required />
+            <input class="field" type="file" accept="image/*" @change="handleProofFileChange" />
+            <p v-if="selectedProofFileName" class="file-hint">已選擇憑證圖片：{{ selectedProofFileName }}</p>
+            <input v-model="proofForm.transfer_proof_url" class="field mt-2" type="text" placeholder="https://... (圖片網址，可選)" />
           </div>
           <button class="btn btn-primary w-full" type="submit" :disabled="isProcessing">
             {{ room.order?.status === 'proof_uploaded' ? $t('comm_room.reupload_proof') : $t('comm_room.upload_proof') }}
@@ -332,7 +370,8 @@ onUnmounted(() => {
         <div v-if="isManager && room.order?.status === 'proof_uploaded'" class="action-block">
           <h4>{{ $t('comm_room.confirm_payment_title') }}</h4>
           <p class="meta mb-2">{{ $t('comm_room.proof_url_label') }}</p>
-          <a :href="room.order?.transfer_proof_url" target="_blank" class="proof-link">{{ room.order?.transfer_proof_url }}</a>
+          <a v-if="normalizedProofUrl" :href="normalizedProofUrl" target="_blank" class="proof-link">{{ normalizedProofUrl }}</a>
+          <p v-else class="meta">尚未提供可用圖片網址</p>
           <button class="btn btn-primary w-full mt-4" @click="handleConfirmPayment" :disabled="isProcessing">{{ $t('comm_room.confirm_payment_btn') }}</button>
         </div>
 

@@ -19,3 +19,18 @@ class Cost(Base):
         DateTime(timezone=True), nullable=False,
         default=lambda: datetime.now(timezone.utc)
     )
+
+
+class Revenue(Base):
+    __tablename__ = "revenues"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    amount_twd: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    recorded_at: Mapped[date] = mapped_column(Date, nullable=False)
+    note: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )

@@ -179,6 +179,10 @@ function handleLogout() {
   router.push("/");
 }
 
+function handleAuthExpired() {
+  authStore.logout();
+}
+
 onMounted(() => {
   syncCartCount();
   // Restore persisted locale on mount
@@ -190,11 +194,13 @@ onMounted(() => {
   if (shouldClearUnreadOnRoute(route.fullPath)) {
     clearUnreadBadgeLocal();
   }
+  window.addEventListener("wakou-auth-expired", handleAuthExpired);
   window.addEventListener("storage", syncCartCount);
   window.addEventListener("focus", syncCartCount);
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("wakou-auth-expired", handleAuthExpired);
   window.removeEventListener("storage", syncCartCount);
   window.removeEventListener("focus", syncCartCount);
 });

@@ -96,6 +96,8 @@ class _PureAdminRefreshRequest(BaseModel):
 def register(payload: RegisterRequest) -> dict[str, str]:
     session = SessionLocal()
     try:
+        if payload.role != "buyer":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Public registration only supports buyer role")
         verify_register_verification_code(payload.email, payload.verification_code)
         user = register_user(session, payload.email, payload.password, payload.role)
         if user.email not in state_mod.USER_DISPLAY_NAMES:

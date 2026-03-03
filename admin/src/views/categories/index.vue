@@ -2,9 +2,7 @@
 import { ref, onMounted } from "vue";
 import {
   getCategories,
-  createCategory,
   updateCategory,
-  deleteCategory
 } from "@/api/categories";
 import type { Category } from "@/api/categories";
 import { ElMessage } from "element-plus";
@@ -17,7 +15,7 @@ const loading = ref(true);
 const categories = ref<Category[]>([]);
 
 const dialogVisible = ref(false);
-const dialogType = ref<"create" | "edit">("create");
+const dialogType = ref<"edit">("edit");
 const formLoading = ref(false);
 
 const formData = ref<Partial<Category>>({
@@ -53,18 +51,6 @@ const loadData = async () => {
   }
 };
 
-const handleCreate = () => {
-  dialogType.value = "create";
-  formData.value = {
-    id: "",
-    title: { "zh-Hant": "", ja: "", en: "" },
-    image: "",
-    sort_order: 0,
-    is_active: true
-  };
-  dialogVisible.value = true;
-};
-
 const handleEdit = (row: Category) => {
   dialogType.value = "edit";
   formData.value = {
@@ -72,19 +58,6 @@ const handleEdit = (row: Category) => {
     title: { ...row.title }
   };
   dialogVisible.value = true;
-};
-
-const handleDelete = async (row: Category) => {
-  if (!row.id) return;
-  try {
-    await deleteCategory(row.id);
-    ElMessage.success("刪除成功");
-    loadData();
-  } catch (error: unknown) {
-    const msg =
-      error instanceof Error ? error.message : "刪除失敗";
-    ElMessage.error(msg);
-  }
 };
 
 const submitForm = async () => {
@@ -96,20 +69,10 @@ const submitForm = async () => {
     ElMessage.warning("請填寫所有名稱欄位");
     return;
   }
-  if (dialogType.value === "create" && !formData.value.id) {
-    ElMessage.warning("請填寫分類 ID");
-    return;
-  }
-
   try {
     formLoading.value = true;
-    if (dialogType.value === "create") {
-      await createCategory(formData.value);
-      ElMessage.success("新增成功");
-    } else {
-      await updateCategory(formData.value.id!, formData.value);
-      ElMessage.success("更新成功");
-    }
+    await updateCategory(formData.value.id!, formData.value);
+    ElMessage.success("更新成功");
     dialogVisible.value = false;
     loadData();
   } catch (error: unknown) {
@@ -132,9 +95,6 @@ onMounted(() => {
       <template #header>
         <div class="flex justify-between items-center">
           <span class="text-lg font-bold">分類管理</span>
-          <el-button type="success" @click="handleCreate"
-            >新增分類</el-button
-          >
         </div>
       </template>
 
@@ -187,14 +147,6 @@ onMounted(() => {
             <el-button link type="primary" @click="handleEdit(row)"
               >編輯</el-button
             >
-            <el-popconfirm
-              title="確定要刪除嗎？"
-              @confirm="handleDelete(row)"
-            >
-              <template #reference>
-                <el-button link type="danger">刪除</el-button>
-              </template>
-            </el-popconfirm>
           </template>
         </el-table-column>
       </el-table>
@@ -202,7 +154,7 @@ onMounted(() => {
 
     <el-dialog
       v-model="dialogVisible"
-      :title="dialogType === 'create' ? '新增分類' : '編輯分類'"
+      title="編輯分類"
       width="600px"
     >
       <el-form :model="formData" label-width="100px">
@@ -210,7 +162,7 @@ onMounted(() => {
           <el-input
             v-model="formData.id"
             placeholder="例如: watch"
-            :disabled="dialogType === 'edit'"
+            disabled
           />
         </el-form-item>
         <el-form-item label="中文名稱" required>

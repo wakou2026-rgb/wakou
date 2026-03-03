@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed, nextTick, reactive } from "vue";
 import {
   TrendCharts,
   PieChart,
@@ -21,8 +21,31 @@ import {
   type CostEntry,
   type CategoryBreakdownItem
 } from "@/api/finance";
+import {
+  getLedger,
+  createLedgerItem,
+  markSold,
+  deleteLedgerItem,
+  setDistributions,
+  getInvestors,
+  createInvestor,
+  addContribution,
+  getInvestorsSummary,
+  type LedgerItem,
+  type Investor,
+  type InvestorSummary,
+  type LedgerCreatePayload,
+  type DistributionsPayload,
+  type InvestorCreatePayload,
+  type ContributionPayload
+} from "@/api/ledger";
 import { useECharts } from "@pureadmin/utils";
-import { ElMessage } from "element-plus";
+import * as echarts from 'echarts/core';
+import { BarChart, PieChart as EcPieChart } from 'echarts/charts';
+import { TooltipComponent, LegendComponent, GridComponent } from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
+echarts.use([BarChart, EcPieChart, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer]);
+import { ElMessage, ElMessageBox } from "element-plus";
 
 defineOptions({ name: "FinanceIndex" });
 
@@ -77,6 +100,120 @@ const {
 } = useECharts(pieChartRef as any);
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let chartsResizeObserver: ResizeObserver | null = null;
+
+// ─── Ledger Charts ───────────────────────────────────────────────────────────
+const ledgerBarRef = ref<HTMLDivElement | null>(null);
+const investorPieRef = ref<HTMLDivElement | null>(null);
+const investorBarRef = ref<HTMLDivElement | null>(null);
+let ledgerBarChart: echarts.ECharts | null = null;
+let investorPieChart: echarts.ECharts | null = null;
+let investorBarChart: echarts.ECharts | null = null;
+
+function getLedgerBarChart(): echarts.ECharts | null {
+  if (!ledgerBarRef.value) return null;
+  if (!ledgerBarChart || ledgerBarChart.getDom() !== ledgerBarRef.value) {
+    ledgerBarChart?.dispose();
+    ledgerBarChart = echarts.init(ledgerBarRef.value);
+  }
+  return ledgerBarChart;
+}
+
+function getInvestorPieChart(): echarts.ECharts | null {
+  if (!investorPieRef.value) return null;
+  if (!investorPieChart || investorPieChart.getDom() !== investorPieRef.value) {
+    investorPieChart?.dispose();
+    investorPieChart = echarts.init(investorPieRef.value);
+  }
+  return investorPieChart;
+}
+
+function getInvestorBarChart(): echarts.ECharts | null {
+  if (!investorBarRef.value) return null;
+  if (!investorBarChart || investorBarChart.getDom() !== investorBarRef.value) {
+    investorBarChart?.dispose();
+    investorBarChart = echarts.init(investorBarRef.value);
+  }
+  return investorBarChart;
+}
+
+function renderLedgerBarChart() {
+  const chart = getLedgerBarChart();
+  if (!chart) return;
+  const items = ledgerItems.value;
+  if (!items.length) return;
+  const names = items.map(i => i.item_name.length > 10 ? i.item_name.slice(0, 10) + '\u2026' : i.item_name);
+  const purchases = items.map(i => i.cost_twd);
+  const revenues = items.map(i => i.sold && i.actual_price_twd ? i.actual_price_twd : 0);
+  chart.setOption({
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params: any[]) =>
+        params[0].name + '<br/>' +
+        params.map((p: any) => `${p.marker}${p.seriesName}: NT$${Number(p.value).toLocaleString()}`).join('<br/>')
+    },
+    legend: { data: ['進貨成本', '售出收入'], top: 6, textStyle: { fontSize: 12 } },
+    grid: { left: 12, right: 12, top: 40, bottom: 40, containLabel: true },
+    xAxis: { type: 'category', data: names, axisLabel: { fontSize: 11, interval: 0, rotate: names.length > 6 ? 30 : 0 } },
+    yAxis: { type: 'value', axisLabel: { formatter: (v: number) => v >= 1000 ? `${Math.round(v / 1000)}k` : String(v) }, splitLine: { lineStyle: { color: '#f0f0f0' } } },
+    series: [
+      { name: '進貨成本', type: 'bar', data: purchases, itemStyle: { color: '#ff7875', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 40 },
+      { name: '售出收入', type: 'bar', data: revenues, itemStyle: { color: '#73d13d', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 40 }
+    ]
+  }, true);
+}
+
+function renderInvestorPieChart() {
+  const chart = getInvestorPieChart();
+  if (!chart) return;
+  const data = investorSummary.value
+    .map(inv => ({ name: inv.name, value: inv.total_contributed_twd || 0 }))
+    .filter(d => d.value > 0);
+  if (!data.length) return;
+  chart.setOption({
+    tooltip: {
+      trigger: 'item',
+      formatter: (p: any) => `${p.name}<br/>出資: NT$${Number(p.value).toLocaleString()}<br/>佔比: ${p.percent}%`
+    },
+    legend: { orient: 'vertical', right: 8, top: 'middle', textStyle: { fontSize: 12 } },
+    series: [{
+      name: '出資佔比',
+      type: 'pie',
+      radius: ['45%', '72%'],
+      center: ['40%', '50%'],
+      avoidLabelOverlap: true,
+      label: { show: false },
+      emphasis: { label: { show: true, fontSize: 13, fontWeight: 'bold' } },
+      data
+    }]
+  }, true);
+}
+
+function renderInvestorBarChart() {
+  const chart = getInvestorBarChart();
+  if (!chart) return;
+  const names = investorSummary.value.map(inv => inv.name);
+  const contributed = investorSummary.value.map(inv => inv.total_contributed_twd || 0);
+  const profits = investorSummary.value.map(inv => inv.total_distributed_twd || 0);
+  if (!names.length) return;
+  chart.setOption({
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      formatter: (params: any[]) =>
+        params[0].name + '<br/>' +
+        params.map((p: any) => `${p.marker}${p.seriesName}: NT$${Number(p.value).toLocaleString()}`).join('<br/>')
+    },
+    legend: { data: ['總出資', '已分配利潤'], top: 6, textStyle: { fontSize: 12 } },
+    grid: { left: 12, right: 12, top: 40, bottom: 20, containLabel: true },
+    xAxis: { type: 'category', data: names, axisLabel: { fontSize: 12 } },
+    yAxis: { type: 'value', axisLabel: { formatter: (v: number) => v >= 1000 ? `${Math.round(v / 1000)}k` : String(v) }, splitLine: { lineStyle: { color: '#f0f0f0' } } },
+    series: [
+      { name: '總出資', type: 'bar', data: contributed, itemStyle: { color: '#5b8ff9', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 50 },
+      { name: '已分配利潤', type: 'bar', data: profits, itemStyle: { color: '#ffd666', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 50 }
+    ]
+  }, true);
+}
 
 const monthLabels = computed(() =>
   monthlyData.value.map(d => `${d.month}月`)
@@ -230,6 +367,9 @@ const resizeCharts = () => {
   if (getPieInstance()) {
     resizePieChart();
   }
+  ledgerBarChart?.resize();
+  investorPieChart?.resize();
+  investorBarChart?.resize();
 };
 
 const scheduleChartsResize = () => {
@@ -252,6 +392,15 @@ const setupChartsResizeObserver = () => {
   }
   if (pieChartRef.value) {
     chartsResizeObserver.observe(pieChartRef.value);
+  }
+  if (ledgerBarRef.value) {
+    chartsResizeObserver.observe(ledgerBarRef.value);
+  }
+  if (investorPieRef.value) {
+    chartsResizeObserver.observe(investorPieRef.value);
+  }
+  if (investorBarRef.value) {
+    chartsResizeObserver.observe(investorBarRef.value);
   }
 };
 
@@ -417,7 +566,247 @@ onMounted(() => {
   }
   loadAll();
   loadCosts();
+  loadLedger();
+  loadInvestors();
+  loadInvestorSummary();
+  loadInvestors();
 });
+
+// ─── Ledger State ────────────────────────────────────────────────────────────
+const ledgerTab = ref("ledger");
+
+const ledgerLoading = ref(false);
+const ledgerItems = ref<LedgerItem[]>([]);
+const showAddLedgerForm = ref(false);
+const addLedgerForm = reactive<LedgerCreatePayload>({
+  item_name: "",
+  purchase_date: new Date().toISOString().slice(0, 10),
+  cost_jpy: 0,
+  exchange_rate: 0.21,
+  expected_price_twd: 0,
+  grade: "A",
+  location: "",
+  source: "",
+  note: ""
+});
+const addLedgerLoading = ref(false);
+
+const unsoldItems = computed(() => ledgerItems.value.filter(i => !i.sold));
+const soldItems = computed(() => ledgerItems.value.filter(i => i.sold));
+
+async function loadLedger() {
+  ledgerLoading.value = true;
+  try {
+    const res: any = await getLedger();
+    const payload = res?.data ?? res;
+    ledgerItems.value = Array.isArray(payload?.items) ? payload.items : [];
+    await nextTick();
+    renderLedgerBarChart();
+  } catch (e: any) {
+    ElMessage.error(e?.message || "載入帳本失敗");
+  } finally {
+    ledgerLoading.value = false;
+  }
+}
+
+async function submitAddLedger() {
+  if (!addLedgerForm.item_name.trim()) {
+    ElMessage.warning("請填寫商品名稱");
+    return;
+  }
+  addLedgerLoading.value = true;
+  try {
+    await createLedgerItem({
+      item_name: addLedgerForm.item_name.trim(),
+      purchase_date: addLedgerForm.purchase_date || new Date().toISOString().slice(0, 10),
+      cost_jpy: Number(addLedgerForm.cost_jpy) || 0,
+      exchange_rate: Number(addLedgerForm.exchange_rate) || 0.21,
+      expected_price_twd: Number(addLedgerForm.expected_price_twd) || 0,
+      grade: addLedgerForm.grade || "A",
+      location: addLedgerForm.location?.trim() || undefined,
+      source: addLedgerForm.source?.trim() || undefined,
+      note: addLedgerForm.note?.trim() || undefined
+    });
+    ElMessage.success("帳本項目已新增");
+    Object.assign(addLedgerForm, { item_name: "", purchase_date: new Date().toISOString().slice(0, 10), cost_jpy: 0, exchange_rate: 0.21, expected_price_twd: 0, grade: "A", location: "", source: "", note: "" });
+    showAddLedgerForm.value = false;
+    await loadLedger();
+  } catch (e: any) {
+    ElMessage.error(e?.message || "新增失敗");
+  } finally {
+    addLedgerLoading.value = false;
+  }
+}
+
+async function handleMarkSold(item: LedgerItem) {
+  const sellingPriceStr = await ElMessageBox.prompt(
+    `請輸入「${item.item_name}」的售出價格（TWD）`,
+    "標記售出",
+    { confirmButtonText: "確認", cancelButtonText: "取消", inputPattern: /^\d+(\.(\d+))?$/, inputErrorMessage: "請輸入有效金額" }
+  ).then(r => r.value).catch(() => null);
+  if (!sellingPriceStr) return;
+  try {
+    await markSold(item.id, { actual_price_twd: Number(sellingPriceStr) });
+    ElMessage.success("已標記售出");
+    await loadLedger();
+  } catch (e: any) {
+    ElMessage.error(e?.message || "標記售出失敗");
+  }
+}
+
+async function handleDeleteLedger(item: LedgerItem) {
+  await ElMessageBox.confirm(`確定刪除「${item.item_name}」？`, "確認刪除", {
+    confirmButtonText: "刪除", cancelButtonText: "取消", type: "warning"
+  }).catch(() => { throw new Error("cancel"); });
+  try {
+    await deleteLedgerItem(item.id);
+    ElMessage.success("已刪除");
+    await loadLedger();
+  } catch (e: any) {
+    if (e?.message === "cancel") return;
+    ElMessage.error(e?.message || "刪除失敗");
+  }
+}
+
+// Distribution dialog
+const distDialog = ref(false);
+const distTargetItem = ref<LedgerItem | null>(null);
+const distForm = reactive<{ investor_id: number; amount: number; label: string; note: string }>({ investor_id: 0, amount: 0, label: "", note: "" });
+const distLoading = ref(false);
+
+function openDistDialog(item: LedgerItem) {
+  distTargetItem.value = item;
+  Object.assign(distForm, { investor_id: 0, amount: 0, label: "", note: "" });
+  distDialog.value = true;
+}
+
+async function submitDistribution() {
+  if (!distForm.investor_id || !distForm.amount) {
+    ElMessage.warning("請選擇投資人並填寫金額");
+    return;
+  }
+  distLoading.value = true;
+  try {
+    const inv = investors.value.find(i => i.id === distForm.investor_id);
+    await setDistributions(distTargetItem.value!.id, {
+      distributions: [{
+        investor_id: distForm.investor_id,
+        label: distForm.label || inv?.name || "利潤分配",
+        amount_twd: Number(distForm.amount)
+      }]
+    });
+    ElMessage.success("利潤分配已記錄");
+    distDialog.value = false;
+    await loadInvestorSummary();
+  } catch (e: any) {
+    ElMessage.error(e?.message || "分配失敗");
+  } finally {
+    distLoading.value = false;
+  }
+}
+
+// Investors
+const investorsLoading = ref(false);
+const investors = ref<Investor[]>([]);
+const showInvestorForm = ref(false);
+const investorForm = reactive<InvestorCreatePayload>({ name: "", note: "" });
+const investorAddLoading = ref(false);
+const contribDialog = ref(false);
+const contribTarget = ref<Investor | null>(null);
+const contribForm = reactive<ContributionPayload>({ amount_twd: 0, contributed_at: new Date().toISOString().slice(0, 10), note: "" });
+const contribLoading = ref(false);
+
+async function loadInvestors() {
+  investorsLoading.value = true;
+  try {
+    const res: any = await getInvestors();
+    const payload = res?.data ?? res;
+    investors.value = Array.isArray(payload?.investors) ? payload.investors : [];
+  } catch (e: any) {
+    ElMessage.error(e?.message || "載入投資人失敗");
+  } finally {
+    investorsLoading.value = false;
+  }
+}
+
+async function submitInvestor() {
+  if (!investorForm.name.trim()) {
+    ElMessage.warning("請填寫投資人姓名");
+    return;
+  }
+  investorAddLoading.value = true;
+  try {
+    await createInvestor({
+      name: investorForm.name.trim(),
+      note: investorForm.note?.trim() || undefined
+    });
+    ElMessage.success("投資人已新增");
+    Object.assign(investorForm, { name: "", note: "" });
+    showInvestorForm.value = false;
+    await loadInvestors();
+  } catch (e: any) {
+    ElMessage.error(e?.message || "新增投資人失敗");
+  } finally {
+    investorAddLoading.value = false;
+  }
+}
+
+function openContribDialog(investor: Investor) {
+  contribTarget.value = investor;
+  Object.assign(contribForm, { amount_twd: 0, contributed_at: new Date().toISOString().slice(0, 10), note: "" });
+  contribDialog.value = true;
+}
+
+async function submitContribution() {
+  if (!contribForm.amount_twd) {
+    ElMessage.warning("請填寫出資金額");
+    return;
+  }
+  contribLoading.value = true;
+  try {
+    await addContribution(contribTarget.value!.id, {
+      amount_twd: Number(contribForm.amount_twd),
+      contributed_at: contribForm.contributed_at || new Date().toISOString().slice(0, 10),
+      note: contribForm.note || undefined
+    });
+    ElMessage.success("出資記錄已新增");
+    contribDialog.value = false;
+  } catch (e: any) {
+    ElMessage.error(e?.message || "新增出資失敗");
+  } finally {
+    contribLoading.value = false;
+  }
+}
+
+// Summary
+const summaryInvLoading = ref(false);
+const investorSummary = ref<InvestorSummary[]>([]);
+
+async function loadInvestorSummary() {
+  summaryInvLoading.value = true;
+  try {
+    const res: any = await getInvestorsSummary();
+    const payload = res?.data ?? res;
+    investorSummary.value = Array.isArray(payload?.investors) ? payload.investors : [];
+    await nextTick();
+    renderInvestorPieChart();
+    renderInvestorBarChart();
+  } catch (e: any) {
+    ElMessage.error(e?.message || "載入摘要失敗");
+  } finally {
+    summaryInvLoading.value = false;
+  }
+}
+
+function handleLedgerTabChange(tab: string) {
+  if (tab === "investors" && !investors.value.length) loadInvestors();
+  if (tab === "inv-summary" && !investorSummary.value.length) loadInvestorSummary();
+}
+
+function formatNTD(v: number | null | undefined) {
+  if (v == null) return "—";
+  return `NT$${Number(v).toLocaleString()}`;
+}
 
 onBeforeUnmount(() => {
   if (typeof window !== "undefined") {
@@ -429,6 +818,12 @@ onBeforeUnmount(() => {
   }
   chartsResizeObserver?.disconnect();
   chartsResizeObserver = null;
+  ledgerBarChart?.dispose();
+  ledgerBarChart = null;
+  investorPieChart?.dispose();
+  investorPieChart = null;
+  investorBarChart?.dispose();
+  investorBarChart = null;
 });
 </script>
 
@@ -598,6 +993,284 @@ onBeforeUnmount(() => {
         </el-table-column>
       </el-table>
     </el-card>
+
+    <!-- ── 商品帳本 / 投資人 ──────────────────────────────── -->
+    <el-card shadow="never" class="costs-card">
+      <template #header>
+        <div class="card-header">
+          <span class="card-title">帳本管理</span>
+        </div>
+      </template>
+
+
+      <!-- ── 帳本圖表區 ──────────────────────────────── -->
+      <el-row :gutter="16" class="ledger-chart-row">
+        <!-- 商品帳本：進貨 vs 售出橯條圖 -->
+        <el-col :xs="24" :lg="12">
+          <div class="ledger-chart-card">
+            <div class="ledger-chart-title">
+              <span>📊 商品進貨 / 售出比較</span>
+              <span class="ledger-chart-sub">{{ ledgerItems.length }} 筆商品</span>
+            </div>
+            <div v-if="ledgerItems.length" ref="ledgerBarRef" class="ledger-chart-canvas" />
+            <el-empty v-else description="暫無帳本資料" class="chart-empty" />
+          </div>
+        </el-col>
+
+        <!-- 投資人出資二分圖 -->
+        <el-col :xs="24" :lg="6">
+          <div class="ledger-chart-card">
+            <div class="ledger-chart-title">
+              <span>🧑‍🤝‍🧑 投資人出資佔比</span>
+              <span class="ledger-chart-sub">{{ investorSummary.length }} 位投資人</span>
+            </div>
+            <div v-if="investorSummary.length" ref="investorPieRef" class="ledger-chart-canvas" />
+            <el-empty v-else description="暫無投資人資料" class="chart-empty" />
+          </div>
+        </el-col>
+
+        <!-- 投資摘要：出資 vs 分配利潤 -->
+        <el-col :xs="24" :lg="6">
+          <div class="ledger-chart-card">
+            <div class="ledger-chart-title">
+              <span>💰 出資 / 利潤回報</span>
+              <span class="ledger-chart-sub">各投資人總筆</span>
+            </div>
+            <div v-if="investorSummary.length" ref="investorBarRef" class="ledger-chart-canvas" />
+            <el-empty v-else description="暫無投資資料" class="chart-empty" />
+          </div>
+        </el-col>
+      </el-row>
+
+      <el-divider style="margin: 8px 0 16px;" />
+
+      <el-tabs v-model="ledgerTab" @tab-change="handleLedgerTabChange">
+
+        <!-- Tab 1: 商品帳本 -->
+        <el-tab-pane label="商品帳本" name="ledger">
+          <div class="tab-toolbar">
+            <el-button type="primary" @click="showAddLedgerForm = !showAddLedgerForm">
+              {{ showAddLedgerForm ? '收起' : '+ 新增帳本項目' }}
+            </el-button>
+            <el-button @click="loadLedger" :loading="ledgerLoading">重新整理</el-button>
+          </div>
+          <el-collapse-transition>
+            <el-card v-if="showAddLedgerForm" shadow="never" class="add-card">
+              <el-form :model="addLedgerForm" label-width="110px">
+                <el-row :gutter="16">
+                  <el-col :span="12">
+                    <el-form-item label="商品名稱" required>
+                      <el-input v-model="addLedgerForm.item_name" placeholder="例：COMME des Garçons 外套" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="6">
+                    <el-form-item label="進貨價（JPY）">
+                      <el-input-number v-model="addLedgerForm.cost_jpy" :min="0" style="width:100%" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="6">
+                    <el-form-item label="匯率">
+                      <el-input-number v-model="addLedgerForm.exchange_rate" :min="0" :step="0.01" :precision="4" style="width:100%" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="6">
+                    <el-form-item label="預計售價（TWD）">
+                      <el-input-number v-model="addLedgerForm.expected_price_twd" :min="0" style="width:100%" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="6">
+                    <el-form-item label="入貨日期">
+                      <el-input v-model="addLedgerForm.purchase_date" placeholder="YYYY-MM-DD" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="6">
+                    <el-form-item label="等級">
+                      <el-input v-model="addLedgerForm.grade" placeholder="A/B/C" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="6">
+                    <el-form-item label="來源">
+                      <el-input v-model="addLedgerForm.source" placeholder="蔦屋 / 其他" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="12">
+                    <el-form-item label="備註">
+                      <el-input v-model="addLedgerForm.note" placeholder="備註說明" />
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+                <el-form-item>
+                  <el-button type="primary" :loading="addLedgerLoading" @click="submitAddLedger">新增</el-button>
+                  <el-button @click="showAddLedgerForm = false">取消</el-button>
+                </el-form-item>
+              </el-form>
+            </el-card>
+          </el-collapse-transition>
+
+          <div v-loading="ledgerLoading">
+            <div class="section-title">未售出（{{ unsoldItems.length }} 筆）</div>
+            <el-table :data="unsoldItems" border stripe size="small" empty-text="暫無未售出項目">
+              <el-table-column prop="id" label="ID" width="60" />
+              <el-table-column prop="item_name" label="商品名稱" min-width="180" />
+              <el-table-column label="進貨價" width="120">
+                <template #default="{ row }">{{ formatNTD(row.cost_twd) }}</template>
+              </el-table-column>
+              <el-table-column label="預計售價" width="120">
+                <template #default="{ row }">{{ formatNTD(row.expected_price_twd) }}</template>
+              </el-table-column>
+              <el-table-column label="建立日期" width="120">
+                <template #default="{ row }">{{ row.created_at?.slice(0, 10) }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="180" fixed="right">
+                <template #default="{ row }">
+                  <el-button type="success" size="small" @click="handleMarkSold(row)">標記售出</el-button>
+                  <el-button type="danger" size="small" @click="handleDeleteLedger(row)">刪除</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+
+            <div class="section-title" style="margin-top:16px">已售出（{{ soldItems.length }} 筆）</div>
+            <el-table :data="soldItems" border stripe size="small" empty-text="暫無已售出項目">
+              <el-table-column prop="id" label="ID" width="60" />
+              <el-table-column prop="item_name" label="商品名稱" min-width="180" />
+              <el-table-column label="進貨價" width="110">
+                <template #default="{ row }">{{ formatNTD(row.cost_twd) }}</template>
+              </el-table-column>
+              <el-table-column label="售出價" width="110">
+                <template #default="{ row }">{{ formatNTD(row.actual_price_twd) }}</template>
+              </el-table-column>
+              <el-table-column label="利潤" width="110">
+                <template #default="{ row }">
+                  <span :class="(row.profit_twd ?? 0) >= 0 ? 'ledger-profit-pos' : 'ledger-profit-neg'">
+                    {{ formatNTD(row.profit_twd) }}
+                  </span>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="120" fixed="right">
+                <template #default="{ row }">
+                  <el-button type="primary" size="small" @click="openDistDialog(row)">分配利潤</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-tab-pane>
+
+        <!-- Tab 2: 投資人管理 -->
+        <el-tab-pane label="投資人管理" name="investors">
+          <div class="tab-toolbar">
+            <el-button type="primary" @click="showInvestorForm = !showInvestorForm">
+              {{ showInvestorForm ? '收起' : '+ 新增投資人' }}
+            </el-button>
+            <el-button @click="loadInvestors" :loading="investorsLoading">重新整理</el-button>
+          </div>
+          <el-collapse-transition>
+            <el-card v-if="showInvestorForm" shadow="never" class="add-card">
+              <el-form :model="investorForm" label-width="90px">
+                <el-row :gutter="16">
+                  <el-col :span="8">
+                    <el-form-item label="姓名" required>
+                      <el-input v-model="investorForm.name" placeholder="投資人姓名" />
+                    </el-form-item>
+                  </el-col>
+                  <el-col :span="8">
+                    <el-form-item label="備註">
+                      <el-input v-model="investorForm.note" placeholder="備註（選填）" />
+                    </el-form-item>
+                  </el-col>
+                </el-row>
+                <el-form-item>
+                  <el-button type="primary" :loading="investorAddLoading" @click="submitInvestor">新增</el-button>
+                  <el-button @click="showInvestorForm = false">取消</el-button>
+                </el-form-item>
+              </el-form>
+            </el-card>
+          </el-collapse-transition>
+          <div v-loading="investorsLoading">
+            <el-table :data="investors" border stripe size="small" empty-text="暫無投資人">
+              <el-table-column prop="id" label="ID" width="60" />
+              <el-table-column prop="name" label="姓名" min-width="120" />
+              <el-table-column prop="note" label="備註" min-width="160">
+                <template #default="{ row }">{{ row.note || '—' }}</template>
+              </el-table-column>
+              <el-table-column label="操作" width="120" fixed="right">
+                <template #default="{ row }">
+                  <el-button type="primary" size="small" @click="openContribDialog(row)">新增出資</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-tab-pane>
+
+        <!-- Tab 3: 投資摘要 -->
+        <el-tab-pane label="投資摘要" name="inv-summary">
+          <div class="tab-toolbar">
+            <el-button @click="loadInvestorSummary" :loading="summaryInvLoading">重新整理</el-button>
+          </div>
+          <div v-loading="summaryInvLoading">
+            <el-table :data="investorSummary" border stripe size="small" empty-text="暫無資料">
+              <el-table-column prop="id" label="ID" width="60" />
+              <el-table-column prop="name" label="投資人" min-width="120" />
+              <el-table-column label="總出資額" width="140">
+                <template #default="{ row }">{{ formatNTD(row.total_contributed_twd) }}</template>
+              </el-table-column>
+              <el-table-column label="總獲利分配" width="140">
+                <template #default="{ row }">{{ formatNTD(row.total_distributed_twd) }}</template>
+              </el-table-column>
+              <el-table-column label="淨回報" width="140">
+                <template #default="{ row }">
+                  <span :class="(row.net_twd ?? 0) >= 0 ? 'ledger-profit-pos' : 'ledger-profit-neg'">
+                    {{ formatNTD(row.net_twd) }}
+                  </span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="email" label="Email" min-width="160">
+                <template #default="{ row }">{{ row.email || '—' }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-tab-pane>
+      </el-tabs>
+    </el-card>
+
+    <!-- ── 分配利潤 Dialog ───────────────────────────────────────── -->
+    <el-dialog v-model="distDialog" title="分配利潤" width="420px" destroy-on-close>
+      <el-form :model="distForm" label-width="90px">
+        <el-form-item label="投資人">
+          <el-select v-model="distForm.investor_id" style="width:100%" placeholder="選擇投資人">
+            <el-option v-for="inv in investors" :key="inv.id" :label="inv.name" :value="inv.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="分配金額">
+          <el-input-number v-model="distForm.amount" :min="0" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="備註">
+          <el-input v-model="distForm.note" placeholder="選填" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="distDialog = false">取消</el-button>
+        <el-button type="primary" :loading="distLoading" @click="submitDistribution">確認分配</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ── 新增出資 Dialog ─────────────────────────────────────── -->
+    <el-dialog v-model="contribDialog" :title="`${contribTarget?.name || ''} — 新增出資`" width="380px" destroy-on-close>
+      <el-form :model="contribForm" label-width="90px">
+        <el-form-item label="出資金額">
+          <el-input-number v-model="contribForm.amount_twd" :min="0" style="width:100%" />
+        </el-form-item>
+        <el-form-item label="出資日期">
+          <el-input v-model="contribForm.contributed_at" placeholder="YYYY-MM-DD" />
+        </el-form-item>
+        <el-form-item label="備註">
+          <el-input v-model="contribForm.note" placeholder="選填" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="contribDialog = false">取消</el-button>
+        <el-button type="primary" :loading="contribLoading" @click="submitContribution">確認</el-button>
+      </template>
+    </el-dialog>
 
     <!-- ── Add Cost Dialog ────────────────────────────────────── -->
     <el-dialog v-model="dialogVisible" title="新增成本紀錄" width="440px" draggable>
@@ -830,5 +1503,71 @@ onBeforeUnmount(() => {
 .note-cell {
   color: #595959;
   font-size: 13px;
+}
+
+/* ── Ledger Section ─────────────────────────────────── */
+.tab-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.add-card {
+  margin-bottom: 16px;
+  border: 1px dashed #dcdfe6;
+}
+
+.section-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
+  margin: 12px 0 8px;
+}
+
+.ledger-profit-pos {
+  color: #67c23a;
+  font-weight: 600;
+}
+
+.ledger-profit-neg {
+  color: #f56c6c;
+  font-weight: 600;
+}
+
+/* ── Ledger Charts ─────────────────────────────────── */
+.ledger-chart-row {
+  margin-bottom: 16px;
+}
+
+.ledger-chart-card {
+  background: #fff;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 12px 16px;
+  height: 260px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ledger-chart-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  font-size: 13px;
+  color: #303133;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.ledger-chart-sub {
+  font-size: 12px;
+  color: #909399;
+  font-weight: 400;
+}
+
+.ledger-chart-canvas {
+  flex: 1;
+  min-height: 0;
 }
 </style>

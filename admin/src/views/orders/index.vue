@@ -111,6 +111,13 @@ const handleRefund = async () => {
 };
 
 const statusOptions = [
+  { label: "詢價中", value: "inquiring" },
+  { label: "待報價", value: "waiting_quote" },
+  { label: "已報價", value: "quoted" },
+  { label: "買家已同意", value: "buyer_accepted" },
+  { label: "已上傳匯款證明", value: "proof_uploaded" },
+  { label: "已付款", value: "paid" },
+  { label: "出貨中", value: "shipped" },
   { label: "待處理", value: "pending" },
   { label: "已完成", value: "completed" },
   { label: "已取消", value: "cancelled" },
@@ -118,6 +125,9 @@ const statusOptions = [
 ];
 
 const getStatusType = (status: string) => {
+  if (status === "inquiring" || status === "waiting_quote") return "warning";
+  if (status === "quoted" || status === "buyer_accepted" || status === "proof_uploaded") return "info";
+  if (status === "paid" || status === "shipped") return "success";
   if (status === "pending") return "warning";
   if (status === "completed") return "success";
   if (status === "refunded") return "danger";

@@ -1,3 +1,5 @@
+import { handleUnauthorizedResponse } from "../auth/session";
+
 export function getAccessToken() {
   if (typeof window === "undefined") {
     return "";
@@ -16,6 +18,9 @@ export async function fetchCommRoom(roomId) {
     headers: authHeaders()
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error("load comm room failed");
   }
   return response.json();
@@ -31,6 +36,9 @@ export async function sendMessage(roomId, payload) {
     body: JSON.stringify(payload)
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error("send message failed");
   }
   return response.json();
@@ -46,6 +54,9 @@ export async function submitFinalQuote(roomId, payload) {
     body: JSON.stringify(payload)
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error("submit quote failed");
   }
   return response.json();
@@ -57,6 +68,9 @@ export async function acceptQuote(roomId) {
     headers: authHeaders()
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error("accept quote failed");
   }
   return response.json();
@@ -72,7 +86,28 @@ export async function uploadTransferProof(roomId, payload) {
     body: JSON.stringify(payload)
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error("upload proof failed");
+  }
+  return response.json();
+}
+
+export async function uploadTransferProofFile(roomId, file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`/api/v1/comm-rooms/${roomId}/upload-proof-file`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: formData
+  });
+  if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
+    throw new Error("upload proof file failed");
   }
   return response.json();
 }
@@ -83,6 +118,9 @@ export async function confirmPayment(orderId) {
     headers: authHeaders()
   });
   if (!response.ok) {
+    if (handleUnauthorizedResponse(response)) {
+      throw new Error("login required");
+    }
     throw new Error("confirm payment failed");
   }
   return response.json();

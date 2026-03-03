@@ -84,3 +84,25 @@ def test_me_returns_current_user_profile(client):
     )
     assert me_response.status_code == 200
     assert me_response.json()["email"] == "me@b.com"
+
+
+def test_public_register_rejects_admin_role(client):
+    email = f"{uuid4().hex[:8]}@admin-signup.com"
+    code_response = client.post(
+        "/api/v1/auth/register/request-code",
+        json={"email": email},
+    )
+    assert code_response.status_code == 200
+    verification_code = code_response.json().get("dev_code")
+    assert isinstance(verification_code, str)
+
+    register_response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": email,
+            "password": "Pass123!",
+            "role": "admin",
+            "verification_code": verification_code,
+        },
+    )
+    assert register_response.status_code == 403

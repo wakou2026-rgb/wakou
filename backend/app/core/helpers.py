@@ -25,6 +25,7 @@ auth_models = importlib.import_module("app.modules.auth.models")
 auth_security = importlib.import_module("app.modules.auth.security")
 orders_notification_module = importlib.import_module("app.modules.orders.notification")
 
+
 SessionLocal = db_module.SessionLocal
 User = auth_models.User
 decode_token = auth_security.decode_token
@@ -145,6 +146,22 @@ def _room_timeline(room_id: int) -> list[dict[str, Any]]:
 
 
 def _shipment_events_for(order_id: int) -> list[dict[str, Any]]:
+    # Prefer DB rows; fall back to in-memory state for legacy/test orders
+    import importlib as _il
+    _shipments_models = _il.import_module("app.modules.shipments.models")
+    ShipmentEvent = _shipments_models.ShipmentEvent
+    session = SessionLocal()
+    try:
+        db_rows = list(session.scalars(
+            select(ShipmentEvent)
+            .where(ShipmentEvent.order_id == order_id)
+            .order_by(ShipmentEvent.event_time)
+        ))
+        if db_rows:
+            return [row.to_dict() for row in db_rows]
+    finally:
+        session.close()
+    # fallback: in-memory (used for legacy seed data / test environment)
     rows = list(SHIPMENT_EVENTS.get(order_id, []))
     rows.sort(key=lambda item: item.get("event_time") or "")
     return rows
@@ -158,20 +175,51 @@ def _append_shipment_event(
     location: str | None = None,
     event_time: str | None = None,
 ) -> dict[str, Any]:
-    order = ORDERS.get(order_id)
-    if order is None:
+    # Validate order exists (DB or memory)
+    from app.modules.orders.models import Order as _Order
+    db_session = SessionLocal()
+    db_order = None
+    try:
+        db_order = db_session.get(_Order, order_id)
+    finally:
+        db_session.close()
+    mem_order = ORDERS.get(order_id)
+    if db_order is None and mem_order is None:
         raise HTTPException(status_code=404, detail="order not found")
 
-    normalized_time = event_time
-    if not normalized_time:
+    # Normalise event_time
+    if not event_time:
         normalized_time = datetime.now(timezone.utc).isoformat()
     else:
-        event_time_value = str(event_time)
         try:
-            normalized_time = datetime.fromisoformat(event_time_value.replace("Z", "+00:00")).isoformat()
+            normalized_time = datetime.fromisoformat(
+                str(event_time).replace("Z", "+00:00")
+            ).isoformat()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="invalid event_time") from exc
 
+    # Write to DB when the order is DB-backed
+    if db_order is not None:
+        import importlib as _il; _shipments_models = _il.import_module("app.modules.shipments.models")
+        ShipmentEvent = _shipments_models.ShipmentEvent
+        parsed_time = datetime.fromisoformat(normalized_time)
+        write_session = SessionLocal()
+        try:
+            row = ShipmentEvent(
+                order_id=order_id,
+                status=status,
+                title=title,
+                description=description,
+                location=location,
+                event_time=parsed_time,
+            )
+            write_session.add(row)
+            write_session.commit()
+            write_session.refresh(row)
+        finally:
+            write_session.close()
+
+    # Always keep in-memory copy (for fallback and test envs)
     event = {
         "order_id": order_id,
         "status": status,

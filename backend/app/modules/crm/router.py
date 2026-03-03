@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session
 
 import app.core.state as state_mod
 from ...core.db import get_db_session
-from ...core.helpers import _append_event, _get_user_dict, _require_admin, _require_roles, _user_notifications, _user_points_balance
+from ...core.helpers import _append_event, _get_user_dict, _require_roles, _user_notifications, _user_points_balance
 from ...core.schemas import AdminCrmNotePayload, AdminRewardPayload
 from ...modules.auth.dependencies import require_role
 from ...modules.auth.models import User
+from ...modules.orders.models import Order
 from .schemas import UserBanPayload, UserRoleChangePayload
 
 router = APIRouter(tags=["admin-crm"])
@@ -76,11 +77,34 @@ def admin_set_user_role(
 
 
 @router.get("/api/v1/admin/crm/buyers/{email}/history")
-def get_buyer_history(email: str, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def get_buyer_history(
+    email: str,
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
     _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
 
-    buyer_orders = [o for o in state_mod.ORDERS.values() if o.get("buyer_email") == email]
-    buyer_orders.sort(key=lambda x: x["id"], reverse=True)
+    db_orders = list(
+        session.scalars(
+            select(Order).where(Order.buyer_email == email).order_by(Order.id.desc())
+        )
+    )
+    buyer_orders = [
+        {
+            "id": order.id,
+            "buyer_email": order.buyer_email,
+            "product_id": order.product_id,
+            "product_name": order.product_name,
+            "status": order.status,
+            "amount_twd": order.amount_twd,
+            "final_amount_twd": order.final_amount_twd,
+            "total_price": order.final_amount_twd or order.amount_twd,
+            "comm_room_id": order.comm_room_id,
+            "mode": "inquiry",
+            "created_at": order.created_at.isoformat(),
+        }
+        for order in db_orders
+    ]
 
     total_spent = sum(
         int(o.get("final_amount_twd") or o.get("amount_twd") or 0)

@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: wakou-api-test
+    env: docker
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /api/v1/health
+    disk:
+      name: wakou-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATABASE_URL
+        value: sqlite:////var/data/wakou.db
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: FORCE_DEMO_SEED
+        value: "0"
+      - key: CORS_ALLOW_ORIGINS
+        value: https://wakou-admin-test.onrender.com
+
+  - type: static
+    name: wakou-admin-test
+    rootDir: admin
+    buildCommand: corepack enable && corepack prepare pnpm@latest --activate && pnpm install --frozen-lockfile && pnpm build
+    publishPath: dist
+    envVars:
+      - key: VITE_PUBLIC_PATH
+        value: /
+      - key: VITE_ROUTER_HISTORY
+        value: h5,/
+      - key: VITE_API_BASE_URL
+        value: https://wakou-api-test.onrender.com/api
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

@@ -102,6 +102,13 @@ async function confirmOrder() {
     // but the router push will unmount us anyway.
     await router.push(`/comm-room/${commRoomId}?from=dashboard`);
   } catch (error) {
+    if (error instanceof Error && error.message === "login required") {
+      authStore.logout();
+      showConfirmModal.value = false;
+      isProcessing.value = false;
+      await router.push("/login");
+      return;
+    }
     isError.value = true;
     statusText.value = error instanceof Error ? error.message : "create order failed";
     isProcessing.value = false;

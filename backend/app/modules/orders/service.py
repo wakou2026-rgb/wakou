@@ -40,11 +40,12 @@ def create_order_with_room(
     product_name: str = "",
     amount_twd: int = 0,
 ) -> tuple[Order, CommRoom]:
+    initial_status = "buyer_confirmed" if mode == "buy_now" else "inquiring"
     order = Order(
         buyer_email=buyer_email,
         product_id=product_id,
         product_name=product_name,
-        status="inquiring",
+        status=initial_status,
         amount_twd=amount_twd,
     )
     session.add(order)
@@ -69,11 +70,6 @@ def get_room_with_messages(session: Session, room_id: int) -> CommRoom | None:
     room = session.get(CommRoom, room_id)
     if room is None:
         return None
-    room._messages = list(
-        session.scalars(
-            select(CommMessage).where(CommMessage.room_id == room_id).order_by(CommMessage.id)
-        )
-    )
     return room
 
 

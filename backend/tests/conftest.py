@@ -27,6 +27,11 @@ def _make_fake_user(token: str) -> Any:
             id=9998, email="buyer@example.com", password_hash="",
             role="buyer", display_name="Test Buyer"
         )
+    if token == "super-admin-token-123":
+        return SimpleNamespace(
+            id=9997, email="superadmin@example.com", password_hash="",
+            role="super_admin", display_name="Test Super Admin"
+        )
     return None
 
 
@@ -85,6 +90,11 @@ def admin_token():
 @pytest.fixture
 def buyer_token():
     return "buyer-token-123"
+
+
+@pytest.fixture
+def super_admin_token():
+    return "super-admin-token-123"
 
 
 @pytest.fixture

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
+import re
 import threading
+from uuid import uuid4
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,9 +24,122 @@ from ...core.mailer import build_html_email
 
 router = APIRouter(prefix="/api/v1/admin/comm-rooms", tags=["admin-comm-rooms"])
 buyer_router = APIRouter(tags=["comm-rooms"])
+PROOF_UPLOAD_DIR = Path(__file__).resolve().parents[3] / "uploads" / "proofs"
+PROOF_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+ADMIN_SENDER_ROLES = {"admin", "super_admin", "sales", "maintenance"}
+_OFFER_RE = re.compile(r"\[議價提案\]\s*NT\$([0-9,]+)")
+
+
+def _normalize_sender_role(raw_role: str) -> str:
+    if raw_role in ADMIN_SENDER_ROLES:
+        return "admin"
+    if raw_role == "system":
+        return "system"
+    return "buyer"
+
+
+def _extract_offer_price(message: str) -> int | None:
+    if not message:
+        return None
+    matched = _OFFER_RE.search(message)
+    if not matched:
+        return None
+    digits = matched.group(1).replace(",", "")
+    try:
+        return int(digits)
+    except ValueError:
+        return None
+
+
+def _append_offer_line(message: str, offer_price_twd: int | None) -> str:
+    if offer_price_twd is None:
+        return message
+    offer_text = f"[議價提案] NT${offer_price_twd:,}"
+    if _extract_offer_price(message) is not None:
+        return message
+    return f"{message}\n{offer_text}".strip()
+
+
+def _proof_path_from_url(proof_url: str) -> Path | None:
+    value = proof_url.strip()
+    if not value:
+        return None
+
+    if value.startswith("/uploads/proofs/"):
+        filename = value[len("/uploads/proofs/") :]
+    elif value.startswith("uploads/proofs/"):
+        filename = value[len("uploads/proofs/") :]
+    else:
+        return None
+
+    safe_name = Path(filename).name
+    if not safe_name:
+        return None
+    return PROOF_UPLOAD_DIR / safe_name
+
+
+def _latest_room_proof_url(room_id: int) -> str | None:
+    candidates = [path for path in PROOF_UPLOAD_DIR.glob(f"proof-{room_id}-*") if path.is_file()]
+    if not candidates:
+        return None
+
+    latest = max(candidates, key=lambda path: path.stat().st_mtime)
+    return f"/uploads/proofs/{latest.name}"
+
+
+def _resolve_transfer_proof_url(room_id: int, raw_url: str | None) -> str | None:
+    if raw_url is None:
+        return _latest_room_proof_url(room_id)
+
+    value = raw_url.strip()
+    if not value:
+        return _latest_room_proof_url(room_id)
+
+    if value.startswith("uploads/proofs/"):
+        value = f"/{value}"
+
+    local_path = _proof_path_from_url(value)
+    if local_path is None:
+        return value
+
+    if local_path.exists():
+        return f"/uploads/proofs/{local_path.name}"
+
+    return _latest_room_proof_url(room_id)
 
 
 def _room_to_dict(room: CommRoom, messages: list[CommMessage], order: Order | None) -> dict[str, Any]:
+    normalized_messages: list[dict[str, Any]] = []
+    last_buyer_message_at: str | None = None
+    last_admin_reply_at: str | None = None
+
+    for m in sorted(messages, key=lambda x: x.id):
+        sender_role = _normalize_sender_role(m.sender_role)
+        timestamp = m.created_at.isoformat()
+        if sender_role == "buyer":
+            last_buyer_message_at = timestamp
+        elif sender_role == "admin":
+            last_admin_reply_at = timestamp
+
+        normalized_messages.append(
+            {
+                "id": m.id,
+                "from": sender_role,
+                "sender_email": m.sender_email,
+                "message": m.message,
+                "image_url": m.image_url,
+                "offer_price_twd": _extract_offer_price(m.message),
+                "timestamp": timestamp,
+            }
+        )
+
+    pending_buyer_inquiry = False
+    if last_buyer_message_at:
+        pending_buyer_inquiry = not last_admin_reply_at or last_buyer_message_at > last_admin_reply_at
+
+    transfer_proof_url = _resolve_transfer_proof_url(room.id, room.transfer_proof_url)
+
     return {
         "id": room.id,
         "order_id": room.order_id,
@@ -34,20 +150,14 @@ def _room_to_dict(room: CommRoom, messages: list[CommMessage], order: Order | No
         "final_price_twd": room.final_price_twd,
         "shipping_fee_twd": room.shipping_fee_twd,
         "discount_twd": room.discount_twd,
-        "transfer_proof_url": room.transfer_proof_url,
+        "transfer_proof_url": transfer_proof_url,
+        "pending_buyer_inquiry": pending_buyer_inquiry,
+        "first_inquiry_notified_at": None,
+        "last_notified_at": last_buyer_message_at,
+        "last_buyer_message_at": last_buyer_message_at,
+        "last_admin_reply_at": last_admin_reply_at,
         "created_at": room.created_at.isoformat(),
-        "messages": [
-            {
-                "id": m.id,
-                "from": m.sender_role,
-                "sender_email": m.sender_email,
-                "message": m.message,
-                "image_url": m.image_url,
-                "offer_price_twd": None,
-                "timestamp": m.created_at.isoformat(),
-            }
-            for m in sorted(messages, key=lambda x: x.id)
-        ],
+        "messages": normalized_messages,
     }
 
 
@@ -107,16 +217,66 @@ def admin_update_notification_config(
 
 
 @router.get("")
-def admin_list_comm_rooms(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
+def admin_list_comm_rooms(
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, list[dict[str, Any]]]:
     _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
+
+    db_rooms = list(session.scalars(select(CommRoom).order_by(CommRoom.id.desc())))
+    if db_rooms:
+        db_items: list[dict[str, Any]] = []
+        for room in db_rooms:
+            order = session.scalar(select(Order).where(Order.id == room.order_id))
+            messages = list(session.scalars(select(CommMessage).where(CommMessage.room_id == room.id).order_by(CommMessage.id.asc())))
+            item = _room_to_dict(room, messages, order)
+            if order:
+                item["order"] = {
+                    "id": order.id,
+                    "amount_twd": order.amount_twd,
+                    "final_amount_twd": order.final_amount_twd,
+                    "status": order.status,
+                    "transfer_proof_url": item["transfer_proof_url"],
+                }
+            db_items.append(item)
+        return {"items": db_items}
+
     rooms = list(state_mod.COMM_ROOMS.values())
     rooms.sort(key=lambda r: r["id"], reverse=True)
     return {"items": rooms}
 
 
 @router.get("/{room_id}")
-def admin_get_comm_room(room_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def admin_get_comm_room(
+    room_id: int,
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
     _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
+
+    db_room = session.get(CommRoom, room_id)
+    if db_room is not None:
+        order = session.scalar(select(Order).where(Order.id == db_room.order_id))
+        messages = list(session.scalars(select(CommMessage).where(CommMessage.room_id == db_room.id).order_by(CommMessage.id.asc())))
+        room_data = _room_to_dict(db_room, messages, order)
+        if order:
+            room_data["order"] = {
+                "id": order.id,
+                "amount_twd": order.amount_twd,
+                "discount_twd": db_room.discount_twd,
+                "final_price_twd": db_room.final_price_twd,
+                "shipping_fee_twd": db_room.shipping_fee_twd,
+                "final_amount_twd": order.final_amount_twd,
+                "shipping_carrier": None,
+                "tracking_number": None,
+                "status": order.status,
+                "transfer_proof_url": room_data["transfer_proof_url"],
+            }
+            product = next((p for p in state_mod.PRODUCTS if p["id"] == order.product_id), None)
+            if product and product.get("image_urls"):
+                room_data["product_image_url"] = product["image_urls"][0]
+        return room_data
+
     room = state_mod.COMM_ROOMS.get(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="room not found")
@@ -124,6 +284,10 @@ def admin_get_comm_room(room_id: int, user: dict = Depends(_get_user_dict)) -> d
     room_copy = dict(room)
     if order:
         room_copy["order_id"] = order["id"]
+        room_copy["transfer_proof_url"] = _resolve_transfer_proof_url(
+            room_id,
+            room_copy.get("transfer_proof_url") or order.get("transfer_proof_url"),
+        )
         room_copy["order"] = {
             "id": order["id"],
             "amount_twd": order.get("amount_twd"),
@@ -134,6 +298,7 @@ def admin_get_comm_room(room_id: int, user: dict = Depends(_get_user_dict)) -> d
             "shipping_carrier": order.get("shipping_carrier"),
             "tracking_number": order.get("tracking_number"),
             "status": order.get("status"),
+            "transfer_proof_url": room_copy.get("transfer_proof_url"),
         }
         product = next((p for p in state_mod.PRODUCTS if p["id"] == order.get("product_id")), None)
         if product and product.get("image_urls"):
@@ -142,7 +307,22 @@ def admin_get_comm_room(room_id: int, user: dict = Depends(_get_user_dict)) -> d
 
 
 @buyer_router.get("/api/v1/comm-rooms/me")
-def my_comm_rooms(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[str, Any]]]:
+def my_comm_rooms(
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, list[dict[str, Any]]]:
+    stmt = select(CommRoom).order_by(CommRoom.id.desc())
+    if user["role"] not in state_mod.ORDER_ADMIN_ROLES:
+        stmt = stmt.where(CommRoom.buyer_email == user["email"])
+    db_rooms = list(session.scalars(stmt))
+    if db_rooms:
+        rows: list[dict[str, Any]] = []
+        for room in db_rooms:
+            order = session.scalar(select(Order).where(Order.id == room.order_id))
+            messages = list(session.scalars(select(CommMessage).where(CommMessage.room_id == room.id).order_by(CommMessage.id.asc())))
+            rows.append(_room_to_dict(room, messages, order))
+        return {"items": rows}
+
     rooms = [
         room
         for room in state_mod.COMM_ROOMS.values()
@@ -153,7 +333,31 @@ def my_comm_rooms(user: dict = Depends(_get_user_dict)) -> dict[str, list[dict[s
 
 
 @buyer_router.get("/api/v1/comm-rooms/{room_id}")
-def get_comm_room(room_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def get_comm_room(
+    room_id: int,
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
+    db_room = session.get(CommRoom, room_id)
+    if db_room is not None:
+        if db_room.buyer_email != user["email"] and user["role"] not in state_mod.ORDER_ADMIN_ROLES:
+            raise HTTPException(status_code=403, detail="forbidden")
+        order = session.scalar(select(Order).where(Order.id == db_room.order_id))
+        messages = list(session.scalars(select(CommMessage).where(CommMessage.room_id == db_room.id).order_by(CommMessage.id.asc())))
+        room_data = _room_to_dict(db_room, messages, order)
+        if order:
+            room_data["order"] = {
+                "id": order.id,
+                "amount_twd": order.amount_twd,
+                "final_amount_twd": order.final_amount_twd,
+                "status": order.status,
+                "transfer_proof_url": room_data["transfer_proof_url"],
+            }
+            product = next((p for p in state_mod.PRODUCTS if p["id"] == order.product_id), None)
+            if product and product.get("image_urls") and len(product["image_urls"]) > 0:
+                room_data["product_image_url"] = product["image_urls"][0]
+        return room_data
+
     room = state_mod.COMM_ROOMS.get(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="room not found")
@@ -164,7 +368,12 @@ def get_comm_room(room_id: int, user: dict = Depends(_get_user_dict)) -> dict[st
     room_copy = dict(room)
     if order:
         room_copy["order_id"] = order["id"]
+        room_copy["transfer_proof_url"] = _resolve_transfer_proof_url(
+            room_id,
+            room_copy.get("transfer_proof_url") or order.get("transfer_proof_url"),
+        )
         room_copy["order"] = order
+        room_copy["order"]["transfer_proof_url"] = room_copy.get("transfer_proof_url")
         product = next((p for p in state_mod.PRODUCTS if p["id"] == order["product_id"]), None)
         if product and product.get("image_urls") and len(product["image_urls"]) > 0:
             room_copy["product_image_url"] = product["image_urls"][0]
@@ -176,7 +385,34 @@ def send_comm_room_message(
     room_id: int,
     payload: CommRoomMessagePayload,
     user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
 ) -> dict[str, Any]:
+    db_room = session.get(CommRoom, room_id)
+    if db_room is not None:
+        if db_room.buyer_email != user["email"] and user["role"] not in state_mod.ORDER_ADMIN_ROLES:
+            raise HTTPException(status_code=403, detail="forbidden")
+        sender_type = "admin" if user["role"] in state_mod.ORDER_ADMIN_ROLES else "buyer"
+        message_text = _append_offer_line(payload.message, payload.offer_price_twd)
+        db_msg = CommMessage(
+            room_id=room_id,
+            sender_email=user["email"],
+            sender_role=sender_type,
+            message=message_text,
+            image_url=payload.image_url,
+        )
+        session.add(db_msg)
+        session.commit()
+        session.refresh(db_msg)
+        return {
+            "id": db_msg.id,
+            "from": db_msg.sender_role,
+            "sender_email": db_msg.sender_email,
+            "message": db_msg.message,
+            "image_url": db_msg.image_url,
+            "offer_price_twd": _extract_offer_price(db_msg.message),
+            "timestamp": db_msg.created_at.isoformat(),
+        }
+
     room = state_mod.COMM_ROOMS.get(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="room not found")
@@ -218,8 +454,34 @@ def set_final_quote(
     room_id: int,
     payload: FinalQuotePayload,
     user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
 ) -> dict[str, Any]:
     _require_roles(user, state_mod.ORDER_ADMIN_ROLES)
+
+    db_room = session.get(CommRoom, room_id)
+    if db_room is not None:
+        db_order = session.scalar(select(Order).where(Order.id == db_room.order_id))
+        if db_order is None:
+            raise HTTPException(status_code=404, detail="order not found")
+        db_room.final_price_twd = payload.final_price_twd
+        db_room.shipping_fee_twd = payload.shipping_fee_twd
+        db_room.discount_twd = payload.discount_twd or 0
+        db_order.final_amount_twd = payload.final_price_twd + payload.shipping_fee_twd - (payload.discount_twd or 0)
+        db_order.status = "quoted"
+        session.add(
+            CommMessage(
+                room_id=room_id,
+                sender_email="system@wakou.local",
+                sender_role="system",
+                message=(
+                    f"管理員已更新報價：商品 NT${payload.final_price_twd} / "
+                    f"運費 NT${payload.shipping_fee_twd} / 折扣 NT${payload.discount_twd or 0}"
+                ),
+            )
+        )
+        session.commit()
+        return {"ok": True, "status": "quote_sent"}
+
     room = state_mod.COMM_ROOMS.get(room_id)
     if room is None:
         raise HTTPException(status_code=404, detail="room not found")
@@ -260,7 +522,30 @@ def set_final_quote(
 
 
 @buyer_router.post("/api/v1/comm-rooms/{room_id}/accept-quote")
-def accept_quote(room_id: int, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def accept_quote(
+    room_id: int,
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
+    db_room = session.get(CommRoom, room_id)
+    if db_room is not None:
+        if db_room.buyer_email != user["email"]:
+            raise HTTPException(status_code=404, detail="room not found")
+        db_order = session.scalar(select(Order).where(Order.id == db_room.order_id))
+        if db_order is None or db_order.status != "quoted":
+            raise HTTPException(status_code=400, detail="invalid order state")
+        db_order.status = "buyer_accepted"
+        session.add(
+            CommMessage(
+                room_id=room_id,
+                sender_email="system@wakou.local",
+                sender_role="system",
+                message="買家已接受報價",
+            )
+        )
+        session.commit()
+        return {"ok": True}
+
     room = state_mod.COMM_ROOMS.get(room_id)
     if room is None or room["buyer_email"] != user["email"]:
         raise HTTPException(status_code=404, detail="room not found")
@@ -295,7 +580,38 @@ def upload_proof(
     room_id: int,
     payload: TransferProofPayload,
     user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
 ) -> dict[str, Any]:
+    db_room = session.get(CommRoom, room_id)
+    if db_room is not None:
+        if db_room.buyer_email != user["email"]:
+            raise HTTPException(status_code=404, detail="room not found")
+        db_order = session.scalar(select(Order).where(Order.id == db_room.order_id))
+        if db_order is None or db_order.status not in ["buyer_accepted", "proof_uploaded"]:
+            raise HTTPException(status_code=400, detail="invalid order state")
+        db_room.transfer_proof_url = payload.transfer_proof_url
+        db_order.status = "proof_uploaded"
+        session.add(
+            CommMessage(
+                room_id=room_id,
+                sender_email="system@wakou.local",
+                sender_role="system",
+                message="買家已上傳匯款證明",
+            )
+        )
+        session.commit()
+        _append_event(
+            "payment.proof_uploaded",
+            user["email"],
+            user["role"],
+            order_id=int(db_order.id),
+            room_id=room_id,
+            title="上傳匯款證明",
+            detail="買家已提供匯款存證，待管理員確認",
+            payload={"buyer_email": db_room.buyer_email, "transfer_proof_url": payload.transfer_proof_url},
+        )
+        return {"ok": True}
+
     room = state_mod.COMM_ROOMS.get(room_id)
     if room is None or room["buyer_email"] != user["email"]:
         raise HTTPException(status_code=404, detail="room not found")
@@ -304,6 +620,7 @@ def upload_proof(
         raise HTTPException(status_code=400, detail="invalid order state")
 
     order["transfer_proof_url"] = payload.transfer_proof_url
+    room["transfer_proof_url"] = payload.transfer_proof_url
     order["status"] = "proof_uploaded"
     room.setdefault("messages", []).append(
         {
@@ -352,6 +669,42 @@ def upload_proof(
     return {"ok": True}
 
 
+@buyer_router.post("/api/v1/comm-rooms/{room_id}/upload-proof-file")
+def upload_proof_file(
+    room_id: int,
+    file: UploadFile = File(...),
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="proof image must be an image file")
+
+    original_suffix = Path(file.filename or "").suffix.lower()
+    if original_suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}:
+        original_suffix = ".png"
+
+    content = file.file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="empty proof file")
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="proof file too large")
+
+    filename = f"proof-{room_id}-{uuid4().hex}{original_suffix}"
+    target_path = PROOF_UPLOAD_DIR / filename
+    with open(target_path, "wb") as fp:
+        fp.write(content)
+
+    transfer_proof_url = f"/uploads/proofs/{filename}"
+    result = upload_proof(
+        room_id=room_id,
+        payload=TransferProofPayload(transfer_proof_url=transfer_proof_url),
+        user=user,
+        session=session,
+    )
+    result["transfer_proof_url"] = transfer_proof_url
+    return result
+
+
 @router.post("/{room_id}/messages", status_code=201)
 def admin_post_message(
     room_id: int,
@@ -379,7 +732,7 @@ def admin_post_message(
         msg = CommMessage(
             room_id=room_id,
             sender_email=current_user.email,
-            sender_role=current_user.role,
+            sender_role="admin",
             message=message_text,
             image_url=payload.get("image_url"),
         )
@@ -399,7 +752,7 @@ def admin_post_message(
         _fire_notification(subject=subject, body=body_text, html_body=html)
         return {
             "id": msg.id,
-            "from": msg.sender_role,
+            "from": _normalize_sender_role(msg.sender_role),
             "sender_email": msg.sender_email,
             "message": msg.message,
             "image_url": msg.image_url,

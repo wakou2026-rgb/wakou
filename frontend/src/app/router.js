@@ -18,6 +18,7 @@ import ContactView from "./views/ContactView.vue";
 import CollectionView from "./views/CollectionView.vue";
 import MagazineView from "./views/MagazineView.vue";
 import MagazineDetailView from "./views/MagazineDetailView.vue";
+import LedgerView from "../modules/admin/LedgerView.vue";
 
 
 export const routes = [
@@ -40,6 +41,7 @@ export const routes = [
   { path: "/about", component: AboutView },
   { path: "/contact", component: ContactView, meta: { title: "Contact" } },
   { path: "/warehouse", redirect: "/dashboard/timeline" },
+  { path: "/admin/ledger", component: LedgerView, meta: { requiresAdmin: true, title: "商品帳本" } },
   
 ];
 

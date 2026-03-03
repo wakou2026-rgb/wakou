@@ -1,47 +1,105 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-import app.core.state as state_mod
 from ...core.db import get_db_session
 from ...core.helpers import _get_user_dict, _require_admin
-from ...core.schemas import CostRecordPayload, PointsPolicyPayload
-from .service import get_category_breakdown
+from ...core.schemas import CostRecordPayload, PointsPolicyPayload, RevenueRecordPayload
+from .service import (
+    create_cost,
+    create_revenue,
+    get_category_breakdown,
+    get_monthly_report,
+    get_report_summary,
+    list_costs,
+    list_revenues,
+)
+import app.core.state as state_mod
+
+
+def _parse_iso_date(raw: str) -> date:
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").date()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid recorded_at") from exc
 
 router = APIRouter(tags=["admin-costs"])
 
 
 @router.post("/api/v1/admin/costs", status_code=201)
-def admin_create_cost(payload: CostRecordPayload, user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def admin_create_cost(
+    payload: CostRecordPayload,
+    session: Session = Depends(get_db_session),
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
     _require_admin(user)
-    max_id = max([int(item.get("id") or 0) for item in state_mod.COST_RECORDS], default=0)
-    if state_mod.next_cost_id <= max_id:
-        state_mod.next_cost_id = max_id + 1
-    row = {
-        "id": state_mod.next_cost_id,
+    recorded_at = _parse_iso_date(payload.recorded_at)
+    row = create_cost(
+        session=session,
+        title=payload.title,
+        amount_twd=payload.amount_twd,
+        recorded_at=recorded_at,
+    )
+    return {
+        "id": row.id,
         "title": payload.title,
         "amount_twd": payload.amount_twd,
         "recorded_at": payload.recorded_at,
         "type": "cost",
+        "cost_type": row.cost_type,
     }
-    state_mod.next_cost_id += 1
-    state_mod.COST_RECORDS.append(row)
-    return row
 
 
 @router.get("/api/v1/admin/costs")
-def admin_list_costs(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def admin_list_costs(
+    session: Session = Depends(get_db_session),
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
     _require_admin(user)
+    items = list_costs(session)
     return {
-        "items": sorted(
-            state_mod.COST_RECORDS,
-            key=lambda item: int(item.get("id") or 0),
-            reverse=True,
-        )
+        "items": [
+            {
+                "id": item.id,
+                "title": item.title,
+                "amount_twd": item.amount_twd,
+                "recorded_at": item.recorded_at.isoformat(),
+                "type": "cost",
+                "cost_type": item.cost_type,
+                "product_id": item.product_id,
+            }
+            for item in items
+        ]
+    }
+
+
+@router.post("/api/v1/admin/revenue", status_code=201)
+def admin_create_revenue(
+    payload: RevenueRecordPayload,
+    session: Session = Depends(get_db_session),
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    _require_admin(user)
+    date_text = payload.recorded_at or datetime.now(timezone.utc).date().isoformat()
+    recorded_at = _parse_iso_date(date_text)
+    row = create_revenue(
+        session=session,
+        title=payload.title,
+        amount_twd=payload.amount_twd,
+        recorded_at=recorded_at,
+        note=payload.note,
+    )
+    return {
+        "id": row.id,
+        "title": row.title,
+        "amount_twd": row.amount_twd,
+        "recorded_at": row.recorded_at.isoformat(),
+        "note": row.note,
+        "type": "income",
     }
 
 
@@ -69,64 +127,50 @@ def admin_get_points_policy(user: dict = Depends(_get_user_dict)) -> dict[str, A
 
 
 @router.get("/api/v1/admin/report/summary")
-def admin_report_summary(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def admin_report_summary(
+    session: Session = Depends(get_db_session),
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
     _require_admin(user)
-    revenue_sum = sum(int(item.get("amount_twd") or 0) for item in state_mod.REVENUE_RECORDS)
-    cost_sum = sum(int(item.get("amount_twd") or 0) for item in state_mod.COST_RECORDS)
-
-    date_map: dict[str, dict[str, int]] = {}
-    for item in state_mod.REVENUE_RECORDS:
-        date_key = str(item.get("recorded_at") or datetime.now(timezone.utc).date().isoformat())
-        date_map.setdefault(date_key, {"income": 0, "cost": 0})
-        date_map[date_key]["income"] += int(item.get("amount_twd") or 0)
-    for item in state_mod.COST_RECORDS:
-        date_key = str(item.get("recorded_at") or datetime.now(timezone.utc).date().isoformat())
-        date_map.setdefault(date_key, {"income": 0, "cost": 0})
-        date_map[date_key]["cost"] += int(item.get("amount_twd") or 0)
-
-    series = []
-    for key in sorted(date_map.keys()):
-        income = date_map[key]["income"]
-        cost = date_map[key]["cost"]
-        series.append({"date": key, "income_twd": income, "cost_twd": cost, "profit_twd": income - cost})
-
+    summary = get_report_summary(session)
+    cost_items = list_costs(session)
+    revenue_items = list_revenues(session)
     return {
-        "totals": {
-            "revenue_twd": revenue_sum,
-            "cost_twd": cost_sum,
-            "profit_twd": revenue_sum - cost_sum,
-        },
-        "series": series,
-        "cost_items": sorted(state_mod.COST_RECORDS, key=lambda item: int(item.get("id") or 0), reverse=True),
-        "revenue_items": sorted(
-            state_mod.REVENUE_RECORDS,
-            key=lambda item: int(item.get("id") or 0),
-            reverse=True,
-        ),
+        "totals": summary["totals"],
+        "series": summary["series"],
+        "cost_items": [
+            {
+                "id": item.id,
+                "title": item.title,
+                "amount_twd": item.amount_twd,
+                "recorded_at": item.recorded_at.isoformat(),
+                "type": "cost",
+                "cost_type": item.cost_type,
+                "product_id": item.product_id,
+            }
+            for item in cost_items
+        ],
+        "revenue_items": [
+            {
+                "id": item.id,
+                "title": item.title,
+                "amount_twd": item.amount_twd,
+                "recorded_at": item.recorded_at.isoformat(),
+                "note": item.note,
+                "type": "income",
+            }
+            for item in revenue_items
+        ],
     }
 
 
 @router.get("/api/v1/admin/report/monthly")
-def admin_report_monthly(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
+def admin_report_monthly(
+    session: Session = Depends(get_db_session),
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
     _require_admin(user)
-    month_map: dict[str, dict[str, int]] = {}
-    for item in state_mod.REVENUE_RECORDS:
-        raw_date = str(item.get("recorded_at") or "")
-        month_key = raw_date[:7] if len(raw_date) >= 7 else "unknown"
-        month_map.setdefault(month_key, {"income": 0, "cost": 0})
-        month_map[month_key]["income"] += int(item.get("amount_twd") or 0)
-    for item in state_mod.COST_RECORDS:
-        raw_date = str(item.get("recorded_at") or "")
-        month_key = raw_date[:7] if len(raw_date) >= 7 else "unknown"
-        month_map.setdefault(month_key, {"income": 0, "cost": 0})
-        month_map[month_key]["cost"] += int(item.get("amount_twd") or 0)
-
-    months = []
-    for key in sorted(month_map.keys()):
-        income = month_map[key]["income"]
-        cost = month_map[key]["cost"]
-        months.append({"month": key, "income_twd": income, "cost_twd": cost, "profit_twd": income - cost})
-    return {"months": months}
+    return get_monthly_report(session, datetime.now(timezone.utc).year)
 
 
 @router.get("/api/v1/admin/report/category-breakdown")

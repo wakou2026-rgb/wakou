@@ -69,5 +69,20 @@ export async function fetchPublicMagazines() {
   if (!response.ok) {
     throw new Error("load magazines failed");
   }
-  return response.json();
+  const data = await response.json();
+  const groupedItems = Array.isArray(data?.items) ? data.items : [];
+  const explicitArticles = Array.isArray(data?.articles) ? data.articles : [];
+  const fallbackArticles = groupedItems.flatMap((group) => {
+    const contents = Array.isArray(group?.contents) ? group.contents : [];
+    return contents.map((item) => ({
+      ...item,
+      brand: item?.brand || group?.brand || ""
+    }));
+  });
+
+  return {
+    ...data,
+    items: groupedItems,
+    articles: explicitArticles.length > 0 ? explicitArticles : fallbackArticles
+  };
 }

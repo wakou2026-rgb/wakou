@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import importlib
+import os
+from pathlib import Path
 from typing import Any, cast
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 auth_router_module = importlib.import_module("app.modules.auth.router")
 product_router_module = importlib.import_module("app.modules.products.router")
@@ -23,6 +27,7 @@ users_router_module = importlib.import_module("app.modules.users.router")
 warehouse_router_module = importlib.import_module("app.modules.warehouse.router")
 shipments_router_module = importlib.import_module("app.modules.shipments.router")
 wishlist_router_module = importlib.import_module("app.modules.wishlist.router")
+ledger_router_module = importlib.import_module("app.modules.ledger.router")
 
 slowapi_module = importlib.import_module("slowapi")
 slowapi_errors_module = importlib.import_module("slowapi.errors")
@@ -41,6 +46,21 @@ from app.core.state import ADMIN_BASE_URL, FRONTEND_BASE_URL, INQUIRY_NOTIFY_TO_
 app = FastAPI(title="wakou-api")
 app.state.limiter = auth_router_module.limiter
 app.add_exception_handler(RateLimitExceeded, cast(Any, _rate_limit_exceeded_handler))
+
+_cors_raw = os.getenv("CORS_ALLOW_ORIGINS", "")
+_cors_origins = [origin.strip() for origin in _cors_raw.split(",") if origin.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+_upload_root = Path(__file__).resolve().parents[1] / "uploads"
+_upload_root.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=str(_upload_root)), name="uploads")
 
 app.include_router(product_router_module.router)
 app.include_router(product_router_module.admin_router)
@@ -77,6 +97,7 @@ app.include_router(gacha_router_module.admin_router)
 app.include_router(users_router_module.buyer_router)
 app.include_router(warehouse_router_module.router)
 app.include_router(shipments_router_module.router)
+app.include_router(ledger_router_module.router)
 
 app.include_router(wishlist_router_module.wishlist_router)
 

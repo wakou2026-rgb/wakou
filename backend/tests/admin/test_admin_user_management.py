@@ -19,12 +19,6 @@ def _register_user(client, email: str, password: str = "Pass123!", role: str = "
     assert register_response.status_code == 201
 
 
-def _login_for_access_token(client, email: str, password: str) -> str:
-    response = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert response.status_code == 200
-    return response.json()["access_token"]
-
-
 def _get_user_id(client, admin_token: str, email: str) -> int:
     response = client.get("/api/v1/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     assert response.status_code == 200
@@ -69,15 +63,10 @@ def test_admin_can_unban_user(client, admin_token):
     assert unban_response.json() == {"ok": True, "is_banned": False}
 
 
-def test_admin_can_change_user_role(client, admin_token):
+def test_admin_can_change_user_role(client, admin_token, super_admin_token):
     buyer_email = f"{uuid4().hex[:8]}@role.com"
     _register_user(client, buyer_email)
     user_id = _get_user_id(client, admin_token, buyer_email)
-
-    super_admin_email = f"{uuid4().hex[:8]}@super.com"
-    super_admin_password = "Pass123!"
-    _register_user(client, super_admin_email, super_admin_password, "super_admin")
-    super_admin_token = _login_for_access_token(client, super_admin_email, super_admin_password)
 
     response = client.patch(
         f"/api/v1/admin/users/{user_id}/role",

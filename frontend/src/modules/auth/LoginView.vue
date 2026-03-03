@@ -71,7 +71,7 @@ async function submitLogin() {
           <p v-if="statusText" :class="isError ? 'status-err' : 'status-ok'">
             {{ statusText }}
           </p>
-          <p v-else class="register-prompt">
+          <p class="register-prompt">
             {{ $t('auth.no_account') }} <RouterLink to="/register">{{ $t('auth.register_link') }}</RouterLink>
           </p>
         </div>

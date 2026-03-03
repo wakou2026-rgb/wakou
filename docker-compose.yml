@@ -34,6 +34,8 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key}
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend/uploads:/app/uploads
     mem_limit: 512m
     cpus: '1.0'
     depends_on:

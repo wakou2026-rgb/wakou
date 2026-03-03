@@ -4,18 +4,20 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 import app.core.state as state_mod
+from app.core.db import get_db_session
 from app.core.helpers import (
     _get_user_dict,
     _resolve_membership,
     _user_coupons,
     _user_notifications,
-    _user_orders,
     _user_points_balance,
-    _user_total_spent,
 )
 from app.core.schemas import UpdateProfilePayload, UserNotificationReadPayload
+from app.modules.orders.models import CommRoom, Order
 
 buyer_router = APIRouter(tags=["users"])
 
@@ -47,8 +49,20 @@ def user_dashboard_config(user: dict = Depends(_get_user_dict)) -> dict[str, Any
 
 
 @buyer_router.get("/api/v1/users/growth")
-def user_growth_center(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
-    total_spent = _user_total_spent(user["email"])
+def user_growth_center(
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
+    db_orders = list(
+        session.scalars(
+            select(Order).where(Order.buyer_email == user["email"]).order_by(Order.id.desc())
+        )
+    )
+    total_spent = sum(
+        int(order.final_amount_twd or order.amount_twd or 0)
+        for order in db_orders
+        if order.status in {"paid", "completed"}
+    )
     membership = _resolve_membership(total_spent)
     points_balance = _user_points_balance(user["email"])
     points_items = [item for item in state_mod.POINTS_LOGS if item.get("email") == user["email"]]
@@ -62,8 +76,21 @@ def user_growth_center(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
                 ).isoformat()
             except (ValueError, TypeError, KeyError):
                 pass
-    my_orders = _user_orders(user["email"])
-    my_orders.sort(key=lambda row: row.get("id", 0), reverse=True)
+    my_orders = [
+        {
+            "id": order.id,
+            "buyer_email": order.buyer_email,
+            "product_id": order.product_id,
+            "product_name": order.product_name,
+            "status": order.status,
+            "amount_twd": order.amount_twd,
+            "final_amount_twd": order.final_amount_twd,
+            "comm_room_id": order.comm_room_id,
+            "created_at": order.created_at.isoformat(),
+            "mode": "inquiry",
+        }
+        for order in db_orders
+    ]
     return {
         "membership": {
             "level": membership["name"],
@@ -82,25 +109,43 @@ def user_growth_center(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
 
 
 @buyer_router.get("/api/v1/users/private-salon")
-def user_private_salon(user: dict = Depends(_get_user_dict)) -> dict[str, Any]:
-    growth = user_growth_center(user)
-    orders = [
-        item
-        for item in sorted(
-            _user_orders(user["email"]),
-            key=lambda row: int(row.get("id") or 0),
-            reverse=True,
+def user_private_salon(
+    user: dict = Depends(_get_user_dict),
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
+    growth = user_growth_center(user=user, session=session)
+    orders = growth["orders"]
+
+    db_rooms = list(
+        session.scalars(
+            select(CommRoom).where(CommRoom.buyer_email == user["email"]).order_by(CommRoom.id.desc())
         )
-    ]
-    rooms = [
-        item
-        for item in sorted(
-            state_mod.COMM_ROOMS.values(),
-            key=lambda row: int(row.get("id") or 0),
-            reverse=True,
+    )
+    room_order_map = {
+        order.id: order
+        for order in session.scalars(
+            select(Order).where(Order.buyer_email == user["email"]).order_by(Order.id.desc())
         )
-        if item.get("buyer_email") == user["email"]
-    ]
+    }
+    rooms: list[dict[str, Any]] = []
+    for room in db_rooms:
+        linked_order = room_order_map.get(room.order_id)
+        rooms.append(
+            {
+                "id": room.id,
+                "order_id": room.order_id,
+                "buyer_email": room.buyer_email,
+                "product_id": linked_order.product_id if linked_order else None,
+                "product_name": linked_order.product_name if linked_order else "",
+                "status": room.status,
+                "final_price_twd": room.final_price_twd,
+                "shipping_fee_twd": room.shipping_fee_twd,
+                "discount_twd": room.discount_twd,
+                "transfer_proof_url": room.transfer_proof_url,
+                "created_at": room.created_at.isoformat(),
+                "messages": [],
+            }
+        )
     timeline = [
         entry
         for entry in state_mod.EVENT_LOGS

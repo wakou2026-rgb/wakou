@@ -175,8 +175,8 @@ const removeImage = (url: string) => {
 };
 
 const submitForm = async () => {
-  if (!formData.value.name || !formData.value.price_twd || !formData.value.sku) {
-    ElMessage.warning("請填寫必要欄位（商品名、價格、SKU）");
+  if (!formData.value.sku || !formData.value.category || !formData.value.price_twd || !formData.value.name) {
+    ElMessage.warning("請填寫必要欄位（SKU、商品名、分類、價格）");
     return;
   }
   
@@ -184,8 +184,32 @@ const submitForm = async () => {
     formLoading.value = true;
     
     // Ensure image_urls is an array
+    const zhName =
+      typeof formData.value.name === "string"
+        ? formData.value.name.trim()
+        : formData.value.name?.["zh-Hant"] || "";
+    const jaName =
+      typeof formData.value.name === "object" && formData.value.name !== null
+        ? formData.value.name.ja || zhName
+        : zhName;
+    const enName =
+      typeof formData.value.name === "object" && formData.value.name !== null
+        ? formData.value.name.en || zhName
+        : zhName;
+
     const submitData = {
       ...formData.value,
+      category: formData.value.category || "watch",
+      name: {
+        "zh-Hant": zhName,
+        ja: jaName,
+        en: enName
+      },
+      description: {
+        "zh-Hant": formData.value.description_zh || formData.value.description || "",
+        ja: formData.value.description_ja || formData.value.description || "",
+        en: formData.value.description_en || formData.value.description || ""
+      },
       image_urls: formData.value.image_urls || []
     };
     
@@ -199,7 +223,15 @@ const submitForm = async () => {
     dialogVisible.value = false;
     loadData();
   } catch (error: any) {
-    ElMessage.error(error?.message || "儲存失敗");
+    const detail = error?.response?.data?.detail;
+    if (Array.isArray(detail)) {
+      const firstMsg = detail[0]?.msg;
+      ElMessage.error(firstMsg || "儲存失敗");
+    } else if (typeof detail === "string") {
+      ElMessage.error(detail);
+    } else {
+      ElMessage.error(error?.message || "儲存失敗");
+    }
   } finally {
     formLoading.value = false;
   }
@@ -223,6 +255,10 @@ onMounted(async () => {
     const res: any = await getCategories();
     if (Array.isArray(res)) {
       categories.value = res;
+    } else if (Array.isArray(res?.items)) {
+      categories.value = res.items;
+    } else if (Array.isArray(res?.data?.items)) {
+      categories.value = res.data.items;
     } else if (res?.data && Array.isArray(res.data)) {
       categories.value = res.data;
     }

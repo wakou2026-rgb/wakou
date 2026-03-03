@@ -20,6 +20,8 @@ product_models = importlib.import_module("app.modules.products.models")
 magazine_models = importlib.import_module("app.modules.magazines.models")
 categories_model_module = importlib.import_module("app.modules.categories.models")
 costs_model_module = importlib.import_module("app.modules.costs.models")
+shipments_model_module = importlib.import_module("app.modules.shipments.models")
+ledger_model_module = importlib.import_module("app.modules.ledger.models")
 
 Base = db_module.Base
 SessionLocal = db_module.SessionLocal
@@ -876,20 +878,75 @@ def reset_state() -> None:
         {"id": "lifestyle", "title": "藝術擺件", "image": "/Lifestyle.png"},
         {"id": "accessory", "title": "特選配件", "image": "/Wallets.png"},
     ])
-    # Seed categories to DB
+    # Ensure fixed categories always exist in DB, but do not wipe edited names/images
     _cat_session = SessionLocal()
     try:
-        from sqlalchemy import delete as _delete_cat
-        _cat_session.execute(_delete_cat(Category))
         seed_cats = [
-            Category(id="watch", title_zh="經典腕錶", title_ja="クラシックウォッチ", title_en="Classic Watches", image_url="/Watches.png", sort_order=0),
-            Category(id="bag", title_zh="復古包款", title_ja="ヴィンテージバッグ", title_en="Vintage Bags", image_url="/Handbags.png", sort_order=1),
-            Category(id="jewelry", title_zh="珠寶飾品", title_ja="ジュエリー", title_en="Jewelry", image_url="/Jewelry.png", sort_order=2),
-            Category(id="apparel", title_zh="珍藏服飾", title_ja="コレクションアパレル", title_en="Apparel", image_url="/Apparel.png", sort_order=3),
-            Category(id="lifestyle", title_zh="藝術擺件", title_ja="ライフスタイル", title_en="Lifestyle", image_url="/Lifestyle.png", sort_order=4),
-            Category(id="accessory", title_zh="特選配件", title_ja="セレクトアクセサリー", title_en="Accessories", image_url="/Wallets.png", sort_order=5),
+            {
+                "id": "watch",
+                "title_zh": "經典腕錶",
+                "title_ja": "クラシックウォッチ",
+                "title_en": "Classic Watches",
+                "image_url": "/Watches.png",
+                "sort_order": 0,
+            },
+            {
+                "id": "bag",
+                "title_zh": "復古包款",
+                "title_ja": "ヴィンテージバッグ",
+                "title_en": "Vintage Bags",
+                "image_url": "/Handbags.png",
+                "sort_order": 1,
+            },
+            {
+                "id": "jewelry",
+                "title_zh": "珠寶飾品",
+                "title_ja": "ジュエリー",
+                "title_en": "Jewelry",
+                "image_url": "/Jewelry.png",
+                "sort_order": 2,
+            },
+            {
+                "id": "apparel",
+                "title_zh": "珍藏服飾",
+                "title_ja": "コレクションアパレル",
+                "title_en": "Apparel",
+                "image_url": "/Apparel.png",
+                "sort_order": 3,
+            },
+            {
+                "id": "lifestyle",
+                "title_zh": "藝術擺件",
+                "title_ja": "ライフスタイル",
+                "title_en": "Lifestyle",
+                "image_url": "/Lifestyle.png",
+                "sort_order": 4,
+            },
+            {
+                "id": "accessory",
+                "title_zh": "特選配件",
+                "title_ja": "セレクトアクセサリー",
+                "title_en": "Accessories",
+                "image_url": "/Wallets.png",
+                "sort_order": 5,
+            },
         ]
-        _cat_session.add_all(seed_cats)
+        for item in seed_cats:
+            existing = _cat_session.get(Category, item["id"])
+            if existing is None:
+                _cat_session.add(Category(**item))
+                continue
+            if not existing.title_zh:
+                existing.title_zh = item["title_zh"]
+            if not existing.title_ja:
+                existing.title_ja = item["title_ja"]
+            if not existing.title_en:
+                existing.title_en = item["title_en"]
+            if not existing.image_url:
+                existing.image_url = item["image_url"]
+            existing.sort_order = item["sort_order"]
+            existing.is_active = True
+            _cat_session.add(existing)
         _cat_session.commit()
     finally:
         _cat_session.close()
@@ -989,7 +1046,7 @@ def reset_state() -> None:
 def bootstrap_state() -> None:
     Base.metadata.create_all(bind=engine)
     should_reset = os.getenv("RESET_STATE_ON_BOOT", "0") == "1"
-    force_demo_seed = os.getenv("FORCE_DEMO_SEED", "1") == "1"
+    force_demo_seed = os.getenv("FORCE_DEMO_SEED", "0") == "1"
 
     session = SessionLocal()
     try:
@@ -998,7 +1055,10 @@ def bootstrap_state() -> None:
     finally:
         session.close()
 
-    if should_reset or force_demo_seed:
+    # Seed once when DB is empty so admin can log in after fresh volume init.
+    should_seed_empty_db = (not has_users) and (not has_products)
+
+    if should_reset or force_demo_seed or should_seed_empty_db:
         reset_state()
         return
 

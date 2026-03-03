@@ -73,7 +73,7 @@ const formData = ref<any>({
   image_url: "",
   gallery_urls: [] as string[],
   sort_order: 0,
-  published: false,
+  published: true,
   layout_blocks: [] as Block[]
 });
 
@@ -109,7 +109,7 @@ const resetFormData = () => ({
   image_url: "",
   gallery_urls: [],
   sort_order: 0,
-  published: false,
+  published: true,
   layout_blocks: [] as Block[]
 });
 

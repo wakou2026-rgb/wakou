@@ -10,13 +10,14 @@ import type {
   PureHttpRequestConfig
 } from "./types.d";
 import { stringify } from "qs";
-import { getToken, formatToken } from "@/utils/auth";
+import { getToken, formatToken, removeToken } from "@/utils/auth";
 import { useUserStoreHook } from "@/store/modules/user";
 
 // 相关配置请参考：www.axios-js.com/zh-cn/docs/#axios-request-config-1
 const defaultConfig: AxiosRequestConfig = {
   // 请求超时时间
   timeout: 10000,
+  baseURL: import.meta.env.VITE_API_BASE_URL || "/api",
   headers: {
     Accept: "application/json, text/plain, */*",
     "Content-Type": "application/json",
@@ -87,8 +88,15 @@ class PureHttp {
                       .then(res => {
                         const token = res.data.accessToken;
                         config.headers["Authorization"] = formatToken(token);
-                        PureHttp.requests.forEach(cb => cb(token));
+                        PureHttp.requests.forEach(cb => {
+                          cb(token);
+                        });
                         PureHttp.requests = [];
+                      })
+                      .catch(() => {
+                        PureHttp.requests = [];
+                        removeToken();
+                        useUserStoreHook().logOut();
                       })
                       .finally(() => {
                         PureHttp.isRefreshing = false;
@@ -132,6 +140,15 @@ class PureHttp {
       (error: PureHttpError) => {
         const $error = error;
         $error.isCancelRequest = Axios.isCancel($error);
+        const status = Number($error?.response?.status || 0);
+        const requestUrl = String($error?.config?.url || "");
+        const isAuthEndpoint =
+          requestUrl.endsWith("/login") || requestUrl.endsWith("/refresh-token");
+
+        if (status === 401 && !isAuthEndpoint) {
+          removeToken();
+          useUserStoreHook().logOut();
+        }
         // 所有的响应异常 区分来源为取消请求/非取消请求
         return Promise.reject($error);
       }
