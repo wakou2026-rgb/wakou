@@ -998,7 +998,7 @@ def bootstrap_state() -> None:
     finally:
         session.close()
 
-    if should_reset or force_demo_seed or not has_users or not has_products:
+    if should_reset or force_demo_seed:
         reset_state()
         return
 

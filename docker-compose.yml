@@ -29,6 +29,7 @@ services:
       - .env
     environment:
       APP_ENV: development
+      FORCE_DEMO_SEED: "0"
       DATABASE_URL: mysql+pymysql://wakou:wakou_password@db:3306/wakou
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key}
     ports:
