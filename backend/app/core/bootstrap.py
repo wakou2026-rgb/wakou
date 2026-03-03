@@ -48,16 +48,6 @@ def _run_migrations() -> None:  # noqa: WPS430
             pass
 
 
-def _seed_demo_data() -> None:  # noqa: WPS430
-    """Populate demo/seed data if tables are empty."""
-    try:
-        from app.seed_data import seed_all
-        seed_all()
-    except Exception:
-        # Seed failures must not prevent server startup
-        import traceback
-        traceback.print_exc()
-
 
 def _start_inquiry_reminder_worker() -> None:  # noqa: WPS430
     if state._inquiry_reminder_thread_started:
