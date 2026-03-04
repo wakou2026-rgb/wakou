@@ -20,6 +20,23 @@ services:
         value: "0"
       - key: CORS_ALLOW_ORIGINS
         value: https://wakou-admin-test.onrender.com
+      # SMTP 郵件設定（敏感資料，請在 Render Dashboard 手動填入，不要寫入此檔）
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_APP_PASSWORD
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      # 新用户註冊通知收件人（選填，如 admin@yourdomain.com）
+      - key: NOTIFY_TO_EMAIL
+        sync: false
+      # 前台站域名，用於密碼重設連結
+      - key: FRONTEND_BASE_URL
+        value: https://wakou-fronted.onrender.com
 
   - type: static
     name: wakou-admin-test

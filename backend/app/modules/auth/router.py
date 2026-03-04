@@ -108,11 +108,14 @@ def register(payload: RegisterRequest) -> dict[str, str]:
 
 
 @auth_router.post("/register/request-code")
-def request_register_code(payload: dict[str, str]) -> dict[str, Any]:
+def request_register_code(
+    payload: dict[str, str],
+    session: Session = Depends(get_db_session),
+) -> dict[str, Any]:
     email = str(payload.get("email", "")).strip()
     if not email:
         raise HTTPException(status_code=400, detail="email is required")
-    return send_register_verification_code(email)
+    return send_register_verification_code(email, session=session)
 
 
 @auth_router.post("/login")

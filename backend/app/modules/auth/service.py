@@ -44,10 +44,18 @@ _FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost").rstrip("
 _PASSWORD_RESET_EXPIRE_MINUTES = 30
 
 
-def send_register_verification_code(email: str) -> dict[str, Any]:
+def send_register_verification_code(email: str, session: Session | None = None) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
-    existing = _REGISTRATION_CODES.get(email)
-    sent_at = existing.get("sent_at") if existing else None
+    # 若已存在此 email 的帳號，直接拒絕
+    if session is not None:
+        existing = session.scalar(select(User).where(User.email == email))
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Email already registered",
+            )
+    code_entry = _REGISTRATION_CODES.get(email)
+    sent_at = code_entry.get("sent_at") if code_entry else None
     if isinstance(sent_at, datetime):
         elapsed = (now - sent_at).total_seconds()
         if elapsed < _REGISTER_CODE_COOLDOWN_SECONDS:
