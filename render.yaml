@@ -22,19 +22,17 @@ services:
         value: https://wakou-admin-test.onrender.com
       # SMTP 郵件設定（敏感資料，請在 Render Dashboard 手動填入，不要寫入此檔）
       - key: SMTP_HOST
-        sync: false
+        value: smtp.gmail.com
       - key: SMTP_PORT
-        sync: false
+        value: "587"
       - key: SMTP_USER
-        sync: false
+        value: wakou2026@gmail.com
       - key: SMTP_APP_PASSWORD
         sync: false
       - key: MAIL_FROM
-        sync: false
-      # 新用户註冊通知收件人（選填，如 admin@yourdomain.com）
+        value: wakou2026@gmail.com
       - key: NOTIFY_TO_EMAIL
-        sync: false
-      # 前台站域名，用於密碼重設連結
+        value: wakou2026@gmail.com
       - key: FRONTEND_BASE_URL
         value: https://wakou-fronted.onrender.com
 
