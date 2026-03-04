@@ -69,13 +69,20 @@ export type Investor = {
   created_at: string;
 };
 
-export type InvestorSummary = Investor & {
+export type InvestorSummary = {
+  id: number;
+  name: string;
   total_contributed_twd: number;
   total_distributed_twd: number;
   net_twd: number;
 };
 
 export type InvestorCreatePayload = {
+  name: string;
+  note?: string;
+};
+
+export type InvestorUpdatePayload = {
   name: string;
   note?: string;
 };
@@ -121,6 +128,11 @@ export const getInvestors = () =>
 
 export const createInvestor = (payload: InvestorCreatePayload) =>
   http.request<Investor>("post", "/api/v1/admin/investors", { data: payload });
+
+export const updateInvestor = (investorId: number, payload: InvestorUpdatePayload) =>
+  http.request<Investor>("patch", `/api/v1/admin/investors/${investorId}`, {
+    data: payload
+  });
 
 export const addContribution = (
   investorId: number,

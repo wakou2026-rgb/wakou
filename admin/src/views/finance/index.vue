@@ -29,6 +29,7 @@ import {
   setDistributions,
   getInvestors,
   createInvestor,
+  updateInvestor,
   addContribution,
   getInvestorsSummary,
   type LedgerItem,
@@ -37,6 +38,7 @@ import {
   type LedgerCreatePayload,
   type DistributionsPayload,
   type InvestorCreatePayload,
+  type InvestorUpdatePayload,
   type ContributionPayload
 } from "@/api/ledger";
 import { useECharts } from "@pureadmin/utils";
@@ -572,12 +574,12 @@ onMounted(() => {
   if (typeof window !== "undefined") {
     window.addEventListener("resize", scheduleChartsResize);
   }
+  restoreInvestorRatioMap();
   loadAll();
   loadCosts();
   loadLedger();
   loadInvestors();
   loadInvestorSummary();
-  loadInvestors();
 });
 
 // ─── Ledger State ────────────────────────────────────────────────────────────
@@ -718,14 +720,8 @@ const totalDistRatio = computed(() =>
 );
 
 function toDistributionDraftFromInvestors(): DistributionDraft[] {
-  const totalContributed = investorSummary.value.reduce(
-    (sum, row) => sum + Number(row.total_contributed_twd || 0),
-    0
-  );
   const investorRows = investors.value.map(inv => {
-    const summaryRow = investorSummary.value.find(row => row.id === inv.id);
-    const contributed = Number(summaryRow?.total_contributed_twd || 0);
-    const ratio = totalContributed > 0 ? Number(((contributed / totalContributed) * 100).toFixed(2)) : 0;
+    const ratio = getEffectiveInvestorRatio(inv.id);
     return {
       key: `inv-${inv.id}`,
       investor_id: inv.id,
@@ -825,9 +821,18 @@ async function submitDistribution() {
 // Investors
 const investorsLoading = ref(false);
 const investors = ref<Investor[]>([]);
+const investorRatioMap = ref<Record<number, number>>({});
+const INVESTOR_RATIO_STORAGE_KEY = "wakou_finance_investor_ratio_map";
 const showInvestorForm = ref(false);
 const investorForm = reactive<InvestorCreatePayload>({ name: "", note: "" });
 const investorAddLoading = ref(false);
+const investorEditDialog = ref(false);
+const investorEditLoading = ref(false);
+const investorEditForm = reactive<{ id: number | null; name: string; note: string }>({
+  id: null,
+  name: "",
+  note: ""
+});
 const contribDialog = ref(false);
 const contribTarget = ref<Investor | null>(null);
 const contribForm = reactive<ContributionPayload>({ amount_twd: 0, contributed_at: new Date().toISOString().slice(0, 10), note: "" });
@@ -839,11 +844,73 @@ async function loadInvestors() {
     const res: any = await getInvestors();
     const payload = res?.data ?? res;
     investors.value = Array.isArray(payload?.investors) ? payload.investors : [];
+    const nextMap: Record<number, number> = {};
+    investors.value.forEach(inv => {
+      const ratio = investorRatioMap.value[inv.id];
+      if (Number.isFinite(ratio)) {
+        nextMap[inv.id] = Number(ratio);
+      }
+    });
+    investorRatioMap.value = nextMap;
+    persistInvestorRatioMap();
   } catch (e: any) {
     ElMessage.error(e?.message || "載入投資人失敗");
   } finally {
     investorsLoading.value = false;
   }
+}
+
+function restoreInvestorRatioMap() {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = window.localStorage.getItem(INVESTOR_RATIO_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+    const next: Record<number, number> = {};
+    Object.entries(parsed as Record<string, unknown>).forEach(([key, value]) => {
+      const investorId = Number(key);
+      const ratio = Number(value);
+      if (Number.isFinite(investorId) && Number.isFinite(ratio)) {
+        next[investorId] = ratio;
+      }
+    });
+    investorRatioMap.value = next;
+  } catch {
+    investorRatioMap.value = {};
+  }
+}
+
+function persistInvestorRatioMap() {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(INVESTOR_RATIO_STORAGE_KEY, JSON.stringify(investorRatioMap.value));
+}
+
+function updateInvestorRatio(investorId: number, ratio: number) {
+  investorRatioMap.value = {
+    ...investorRatioMap.value,
+    [investorId]: Number(ratio)
+  };
+  persistInvestorRatioMap();
+}
+
+function getCalculatedInvestorRatio(investorId: number) {
+  const totalContributed = investorSummary.value.reduce(
+    (sum, row) => sum + Number(row.total_contributed_twd || 0),
+    0
+  );
+  if (totalContributed <= 0) return 0;
+  const summaryRow = investorSummary.value.find(row => row.id === investorId);
+  const contributed = Number(summaryRow?.total_contributed_twd || 0);
+  return Number(((contributed / totalContributed) * 100).toFixed(2));
+}
+
+function getEffectiveInvestorRatio(investorId: number) {
+  const configuredRatio = investorRatioMap.value[investorId];
+  if (Number.isFinite(configuredRatio)) {
+    return Number(configuredRatio);
+  }
+  return getCalculatedInvestorRatio(investorId);
 }
 
 async function submitInvestor() {
@@ -868,6 +935,39 @@ async function submitInvestor() {
   }
 }
 
+function openEditInvestorDialog(investor: Investor) {
+  Object.assign(investorEditForm, {
+    id: investor.id,
+    name: investor.name,
+    note: investor.note || ""
+  });
+  investorEditDialog.value = true;
+}
+
+async function submitEditInvestor() {
+  if (!investorEditForm.id) return;
+  if (!investorEditForm.name.trim()) {
+    ElMessage.warning("請填寫投資人姓名");
+    return;
+  }
+  investorEditLoading.value = true;
+  try {
+    const payload: InvestorUpdatePayload = {
+      name: investorEditForm.name.trim(),
+      note: investorEditForm.note?.trim() || ""
+    };
+    await updateInvestor(investorEditForm.id, payload);
+    ElMessage.success("投資人資料已更新");
+    investorEditDialog.value = false;
+    await loadInvestors();
+    await loadInvestorSummary();
+  } catch (e: any) {
+    ElMessage.error(e?.message || "更新投資人失敗");
+  } finally {
+    investorEditLoading.value = false;
+  }
+}
+
 function openContribDialog(investor: Investor) {
   contribTarget.value = investor;
   Object.assign(contribForm, { amount_twd: 0, contributed_at: new Date().toISOString().slice(0, 10), note: "" });
@@ -888,6 +988,7 @@ async function submitContribution() {
     });
     ElMessage.success("出資記錄已新增");
     contribDialog.value = false;
+    await loadInvestorSummary();
   } catch (e: any) {
     ElMessage.error(e?.message || "新增出資失敗");
   } finally {
@@ -1343,11 +1444,26 @@ onBeforeUnmount(() => {
             <el-table :data="investors" border stripe size="small" empty-text="暫無投資人">
               <el-table-column prop="id" label="ID" width="60" />
               <el-table-column prop="name" label="姓名" min-width="120" />
+              <el-table-column label="手動分配比(%)" width="160" align="center">
+                <template #default="{ row }">
+                  <el-input-number
+                    :model-value="getEffectiveInvestorRatio(row.id)"
+                    :min="0"
+                    :max="100"
+                    :step="0.5"
+                    :precision="2"
+                    size="small"
+                    style="width: 120px"
+                    @update:model-value="value => updateInvestorRatio(row.id, Number(value ?? 0))"
+                  />
+                </template>
+              </el-table-column>
               <el-table-column prop="note" label="備註" min-width="160">
                 <template #default="{ row }">{{ row.note || '—' }}</template>
               </el-table-column>
-              <el-table-column label="操作" width="120" fixed="right">
+              <el-table-column label="操作" width="200" fixed="right">
                 <template #default="{ row }">
+                  <el-button type="warning" size="small" @click="openEditInvestorDialog(row)">編輯</el-button>
                   <el-button type="primary" size="small" @click="openContribDialog(row)">新增出資</el-button>
                 </template>
               </el-table-column>
@@ -1376,9 +1492,6 @@ onBeforeUnmount(() => {
                     {{ formatNTD(row.net_twd) }}
                   </span>
                 </template>
-              </el-table-column>
-              <el-table-column prop="email" label="Email" min-width="160">
-                <template #default="{ row }">{{ row.email || '—' }}</template>
               </el-table-column>
             </el-table>
           </div>
@@ -1437,6 +1550,27 @@ onBeforeUnmount(() => {
       <template #footer>
         <el-button @click="contribDialog = false">取消</el-button>
         <el-button type="primary" :loading="contribLoading" @click="submitContribution">確認</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ── 編輯投資人 Dialog ───────────────────────────────────── -->
+    <el-dialog v-model="investorEditDialog" title="編輯投資人" width="420px" destroy-on-close>
+      <el-form :model="investorEditForm" label-width="90px">
+        <el-form-item label="姓名" required>
+          <el-input v-model="investorEditForm.name" placeholder="投資人姓名" />
+        </el-form-item>
+        <el-form-item label="備註">
+          <el-input
+            v-model="investorEditForm.note"
+            type="textarea"
+            :rows="3"
+            placeholder="可記錄角色、分配說明或合約摘要"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="investorEditDialog = false">取消</el-button>
+        <el-button type="primary" :loading="investorEditLoading" @click="submitEditInvestor">儲存</el-button>
       </template>
     </el-dialog>
 
