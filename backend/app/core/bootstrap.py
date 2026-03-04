@@ -1147,7 +1147,7 @@ def reset_state() -> None:
             Investor(name="雷思翰", note="共同創辦人"),
             Investor(name="林少宏", note="營運投資"),
             Investor(name="吳俊賢", note="品牌投資"),
-            Investor(name="黃英哲", note="技術合夥"),
+            Investor(name="林家誠", note="技術合夥"),
         ]
         _ledger_session.add_all(investors)
         _ledger_session.flush()

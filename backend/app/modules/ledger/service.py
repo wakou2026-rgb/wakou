@@ -104,6 +104,20 @@ def create_investor(session: Session, name: str, note: str = "") -> Investor:
     return investor
 
 
+def update_investor(session: Session, investor_id: int, name: str, note: str | None = None) -> Investor:
+    investor = session.get(Investor, investor_id)
+    if investor is None:
+        raise ValueError(f"investor {investor_id} not found")
+
+    investor.name = name
+    if note is not None:
+        investor.note = note
+    session.add(investor)
+    session.commit()
+    session.refresh(investor)
+    return investor
+
+
 def add_contribution(
     session: Session,
     investor_id: int,

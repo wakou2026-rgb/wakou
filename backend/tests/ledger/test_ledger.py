@@ -1,5 +1,4 @@
 from __future__ import annotations
-import pytest
 
 
 def test_create_ledger_item(client, admin_token):
@@ -91,6 +90,43 @@ def test_create_investor_and_contribution(client, admin_token):
     )
     assert contrib_resp.status_code == 201
     assert contrib_resp.json()["amount_twd"] == 50000
+
+
+def test_update_investor(client, admin_token):
+    create_resp = client.post(
+        "/api/v1/admin/investors",
+        json={"name": "林家誠", "note": "原始備註"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert create_resp.status_code == 201
+    investor_id = create_resp.json()["id"]
+
+    update_resp = client.patch(
+        f"/api/v1/admin/investors/{investor_id}",
+        json={"name": "林家誠", "note": "技術分紅比例可調整"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert update_resp.status_code == 200
+    assert update_resp.json()["name"] == "林家誠"
+    assert update_resp.json()["note"] == "技術分紅比例可調整"
+
+    keep_note_resp = client.patch(
+        f"/api/v1/admin/investors/{investor_id}",
+        json={"name": "林家誠（更新）"},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert keep_note_resp.status_code == 200
+    assert keep_note_resp.json()["name"] == "林家誠（更新）"
+    assert keep_note_resp.json()["note"] == "技術分紅比例可調整"
+
+
+def test_update_investor_not_found(client, admin_token):
+    resp = client.patch(
+        "/api/v1/admin/investors/999999",
+        json={"name": "不存在", "note": ""},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert resp.status_code == 404
 
 
 def test_set_distributions(client, admin_token):

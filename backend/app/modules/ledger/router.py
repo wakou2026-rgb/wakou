@@ -8,7 +8,7 @@ from ...core.db import get_db_session
 from ...core.helpers import _get_user_dict, _require_admin
 from .service import (
     list_ledger, create_ledger_item, mark_ledger_sold, delete_ledger_item,
-    list_investors, create_investor, add_contribution,
+    list_investors, create_investor, update_investor, add_contribution,
     set_distributions, get_investor_summary,
 )
 
@@ -47,6 +47,11 @@ class MarkSoldPayload(BaseModel):
 class InvestorPayload(BaseModel):
     name: str
     note: str = ""
+
+
+class InvestorUpdatePayload(BaseModel):
+    name: str
+    note: str | None = None
 
 
 class ContributionPayload(BaseModel):
@@ -169,6 +174,21 @@ def admin_create_investor(
 ) -> dict[str, Any]:
     _require_admin(user)
     inv = create_investor(session, name=payload.name, note=payload.note)
+    return inv.to_dict()
+
+
+@router.patch("/api/v1/admin/investors/{investor_id}")
+def admin_update_investor(
+    investor_id: int,
+    payload: InvestorUpdatePayload,
+    session: Session = Depends(get_db_session),
+    user: dict = Depends(_get_user_dict),
+) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        inv = update_investor(session, investor_id=investor_id, name=payload.name, note=payload.note)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return inv.to_dict()
 
 
