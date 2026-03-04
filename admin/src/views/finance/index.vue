@@ -61,6 +61,8 @@ const summary = ref<ReportSummary>({
 
 const costsLoading = ref(true);
 const costs = ref<CostEntry[]>([]);
+const costsPage = ref(1);
+const costsPageSize = ref(10);
 
 const monthlyData = ref<MonthlyReport[]>([]);
 const categoryData = ref<CategoryBreakdownItem[]>([]);
@@ -443,6 +445,7 @@ const loadCosts = async () => {
   try {
     const res = await getCosts();
     costs.value = Array.isArray(res) ? res : ((res as any).data ?? []);
+    costsPage.value = 1;
   } catch (e: any) {
     ElMessage.error(e?.message ?? "無法載入成本紀錄");
   } finally {
@@ -512,6 +515,11 @@ const submitRevenue = async () => {
 const profitClass = computed(() =>
   (summary.value.profit_twd ?? 0) >= 0 ? "profit-positive" : "profit-negative"
 );
+
+const pagedCosts = computed(() => {
+  const start = (costsPage.value - 1) * costsPageSize.value;
+  return costs.value.slice(start, start + costsPageSize.value);
+});
 
 const formatCurrency = (v: number) =>
   "NT$" + Number(v ?? 0).toLocaleString("zh-TW");
@@ -593,6 +601,19 @@ const addLedgerLoading = ref(false);
 
 const unsoldItems = computed(() => ledgerItems.value.filter(i => !i.sold));
 const soldItems = computed(() => ledgerItems.value.filter(i => i.sold));
+const unsoldPage = ref(1);
+const soldPage = ref(1);
+const ledgerPageSize = ref(10);
+
+const pagedUnsoldItems = computed(() => {
+  const start = (unsoldPage.value - 1) * ledgerPageSize.value;
+  return unsoldItems.value.slice(start, start + ledgerPageSize.value);
+});
+
+const pagedSoldItems = computed(() => {
+  const start = (soldPage.value - 1) * ledgerPageSize.value;
+  return soldItems.value.slice(start, start + ledgerPageSize.value);
+});
 
 async function loadLedger() {
   ledgerLoading.value = true;
@@ -600,6 +621,8 @@ async function loadLedger() {
     const res: any = await getLedger();
     const payload = res?.data ?? res;
     ledgerItems.value = Array.isArray(payload?.items) ? payload.items : [];
+    unsoldPage.value = 1;
+    soldPage.value = 1;
     await nextTick();
     renderLedgerBarChart();
   } catch (e: any) {
@@ -671,30 +694,124 @@ async function handleDeleteLedger(item: LedgerItem) {
 // Distribution dialog
 const distDialog = ref(false);
 const distTargetItem = ref<LedgerItem | null>(null);
-const distForm = reactive<{ investor_id: number; amount: number; label: string; note: string }>({ investor_id: 0, amount: 0, label: "", note: "" });
+type DistributionDraft = {
+  key: string;
+  investor_id: number | null;
+  label: string;
+  ratio: number;
+  amount: number;
+};
+const distRows = ref<DistributionDraft[]>([]);
 const distLoading = ref(false);
+
+const availableProfit = computed(() => {
+  const value = Number(distTargetItem.value?.profit_twd ?? 0);
+  return value > 0 ? value : 0;
+});
+
+const totalDistAmount = computed(() =>
+  distRows.value.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)
+);
+
+const totalDistRatio = computed(() =>
+  distRows.value.reduce((sum, row) => sum + (Number(row.ratio) || 0), 0)
+);
+
+function toDistributionDraftFromInvestors(): DistributionDraft[] {
+  const totalContributed = investorSummary.value.reduce(
+    (sum, row) => sum + Number(row.total_contributed_twd || 0),
+    0
+  );
+  const investorRows = investors.value.map(inv => {
+    const summaryRow = investorSummary.value.find(row => row.id === inv.id);
+    const contributed = Number(summaryRow?.total_contributed_twd || 0);
+    const ratio = totalContributed > 0 ? Number(((contributed / totalContributed) * 100).toFixed(2)) : 0;
+    return {
+      key: `inv-${inv.id}`,
+      investor_id: inv.id,
+      label: inv.name,
+      ratio,
+      amount: 0
+    } as DistributionDraft;
+  });
+  investorRows.push({
+    key: "tech-role",
+    investor_id: null,
+    label: "技術分紅",
+    ratio: 0,
+    amount: 0
+  });
+  return investorRows;
+}
+
+function applyRatioDistribution() {
+  if (availableProfit.value <= 0) {
+    ElMessage.warning("此商品利潤為 0，無可分配金額");
+    return;
+  }
+  const candidates = distRows.value.filter(row => Number(row.ratio) > 0);
+  const ratioTotal = candidates.reduce((sum, row) => sum + Number(row.ratio), 0);
+  if (!ratioTotal) {
+    ElMessage.warning("請先設定比例（總比例需大於 0）");
+    return;
+  }
+
+  let remaining = availableProfit.value;
+  const lastIndex = candidates.length - 1;
+  candidates.forEach((row, idx) => {
+    const amount =
+      idx === lastIndex
+        ? remaining
+        : Math.floor((availableProfit.value * Number(row.ratio)) / ratioTotal);
+    row.amount = amount;
+    remaining -= amount;
+  });
+
+  distRows.value
+    .filter(row => Number(row.ratio) <= 0)
+    .forEach(row => {
+      row.amount = 0;
+    });
+}
 
 function openDistDialog(item: LedgerItem) {
   distTargetItem.value = item;
-  Object.assign(distForm, { investor_id: 0, amount: 0, label: "", note: "" });
+  distRows.value = toDistributionDraftFromInvestors();
   distDialog.value = true;
 }
 
 async function submitDistribution() {
-  if (!distForm.investor_id || !distForm.amount) {
-    ElMessage.warning("請選擇投資人並填寫金額");
+  if (!distTargetItem.value) return;
+  const payloadRows = distRows.value
+    .filter(row => Number(row.amount) > 0)
+    .map(row => ({
+      investor_id: row.investor_id,
+      label: row.label?.trim() || "利潤分配",
+      amount_twd: Number(row.amount)
+    }));
+
+  if (!payloadRows.length) {
+    ElMessage.warning("請至少設定一筆分配金額");
+    return;
+  }
+
+  if (availableProfit.value > 0) {
+    const total = payloadRows.reduce((sum, row) => sum + row.amount_twd, 0);
+    if (total > availableProfit.value) {
+      ElMessage.warning("分配總額不可超過此商品利潤");
+      return;
+    }
+  }
+
+  if (payloadRows.some(row => !row.label.trim())) {
+    ElMessage.warning("分配標籤不可為空");
     return;
   }
   distLoading.value = true;
   try {
-    const inv = investors.value.find(i => i.id === distForm.investor_id);
-    await setDistributions(distTargetItem.value!.id, {
-      distributions: [{
-        investor_id: distForm.investor_id,
-        label: distForm.label || inv?.name || "利潤分配",
-        amount_twd: Number(distForm.amount)
-      }]
-    });
+    await setDistributions(distTargetItem.value.id, {
+      distributions: payloadRows
+    } as DistributionsPayload);
     ElMessage.success("利潤分配已記錄");
     distDialog.value = false;
     await loadInvestorSummary();
@@ -954,7 +1071,7 @@ onBeforeUnmount(() => {
       </template>
 
       <el-table
-        :data="costs"
+        :data="pagedCosts"
         v-loading="costsLoading"
         style="width: 100%"
         stripe
@@ -992,6 +1109,16 @@ onBeforeUnmount(() => {
           </template>
         </el-table-column>
       </el-table>
+      <div class="table-pagination" v-if="costs.length > costsPageSize">
+        <el-pagination
+          v-model:current-page="costsPage"
+          v-model:page-size="costsPageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          background
+          layout="total, sizes, prev, pager, next"
+          :total="costs.length"
+        />
+      </div>
     </el-card>
 
     <!-- ── 商品帳本 / 投資人 ──────────────────────────────── -->
@@ -1043,6 +1170,13 @@ onBeforeUnmount(() => {
       </el-row>
 
       <el-divider style="margin: 8px 0 16px;" />
+      <el-alert
+        type="info"
+        show-icon
+        :closable="false"
+        title="帳本與成本/收入為兩套資料流：帳本商品進出貨不會自動寫入上方成本紀錄；若要進入財報總成本，請同步新增成本紀錄。"
+        style="margin-bottom: 12px"
+      />
 
       <el-tabs v-model="ledgerTab" @tab-change="handleLedgerTabChange">
 
@@ -1109,7 +1243,7 @@ onBeforeUnmount(() => {
 
           <div v-loading="ledgerLoading">
             <div class="section-title">未售出（{{ unsoldItems.length }} 筆）</div>
-            <el-table :data="unsoldItems" border stripe size="small" empty-text="暫無未售出項目">
+            <el-table :data="pagedUnsoldItems" border stripe size="small" empty-text="暫無未售出項目">
               <el-table-column prop="id" label="ID" width="60" />
               <el-table-column prop="item_name" label="商品名稱" min-width="180" />
               <el-table-column label="進貨價" width="120">
@@ -1128,9 +1262,19 @@ onBeforeUnmount(() => {
                 </template>
               </el-table-column>
             </el-table>
+            <div class="table-pagination" v-if="unsoldItems.length > ledgerPageSize">
+              <el-pagination
+                v-model:current-page="unsoldPage"
+                v-model:page-size="ledgerPageSize"
+                :page-sizes="[10, 20, 50, 100]"
+                background
+                layout="total, sizes, prev, pager, next"
+                :total="unsoldItems.length"
+              />
+            </div>
 
             <div class="section-title" style="margin-top:16px">已售出（{{ soldItems.length }} 筆）</div>
-            <el-table :data="soldItems" border stripe size="small" empty-text="暫無已售出項目">
+            <el-table :data="pagedSoldItems" border stripe size="small" empty-text="暫無已售出項目">
               <el-table-column prop="id" label="ID" width="60" />
               <el-table-column prop="item_name" label="商品名稱" min-width="180" />
               <el-table-column label="進貨價" width="110">
@@ -1152,6 +1296,16 @@ onBeforeUnmount(() => {
                 </template>
               </el-table-column>
             </el-table>
+            <div class="table-pagination" v-if="soldItems.length > ledgerPageSize">
+              <el-pagination
+                v-model:current-page="soldPage"
+                v-model:page-size="ledgerPageSize"
+                :page-sizes="[10, 20, 50, 100]"
+                background
+                layout="total, sizes, prev, pager, next"
+                :total="soldItems.length"
+              />
+            </div>
           </div>
         </el-tab-pane>
 
@@ -1234,19 +1388,33 @@ onBeforeUnmount(() => {
 
     <!-- ── 分配利潤 Dialog ───────────────────────────────────────── -->
     <el-dialog v-model="distDialog" title="分配利潤" width="420px" destroy-on-close>
-      <el-form :model="distForm" label-width="90px">
-        <el-form-item label="投資人">
-          <el-select v-model="distForm.investor_id" style="width:100%" placeholder="選擇投資人">
-            <el-option v-for="inv in investors" :key="inv.id" :label="inv.name" :value="inv.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="分配金額">
-          <el-input-number v-model="distForm.amount" :min="0" style="width:100%" />
-        </el-form-item>
-        <el-form-item label="備註">
-          <el-input v-model="distForm.note" placeholder="選填" />
-        </el-form-item>
-      </el-form>
+      <div class="dist-meta">
+        <div>可分配利潤：<b>{{ formatNTD(availableProfit) }}</b></div>
+        <div>目前分配總額：<b>{{ formatNTD(totalDistAmount) }}</b></div>
+      </div>
+      <div class="dist-toolbar">
+        <el-button type="primary" plain size="small" @click="applyRatioDistribution">
+          依比例自動計算
+        </el-button>
+        <span class="dist-ratio">總比例：{{ totalDistRatio.toFixed(2) }}%</span>
+      </div>
+      <el-table :data="distRows" border stripe size="small" empty-text="暫無可分配對象">
+        <el-table-column label="對象" min-width="140">
+          <template #default="{ row }">
+            <el-input v-model="row.label" placeholder="分配標籤（例：技術分紅）" />
+          </template>
+        </el-table-column>
+        <el-table-column label="比例(%)" width="110">
+          <template #default="{ row }">
+            <el-input-number v-model="row.ratio" :min="0" :max="100" :step="0.5" style="width:100%" />
+          </template>
+        </el-table-column>
+        <el-table-column label="金額" width="130">
+          <template #default="{ row }">
+            <el-input-number v-model="row.amount" :min="0" :step="100" style="width:100%" />
+          </template>
+        </el-table-column>
+      </el-table>
       <template #footer>
         <el-button @click="distDialog = false">取消</el-button>
         <el-button type="primary" :loading="distLoading" @click="submitDistribution">確認分配</el-button>
@@ -1505,6 +1673,12 @@ onBeforeUnmount(() => {
   font-size: 13px;
 }
 
+.table-pagination {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* ── Ledger Section ─────────────────────────────────── */
 .tab-toolbar {
   display: flex;
@@ -1569,5 +1743,26 @@ onBeforeUnmount(() => {
 .ledger-chart-canvas {
   flex: 1;
   min-height: 0;
+}
+
+.dist-meta {
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #606266;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dist-toolbar {
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.dist-ratio {
+  font-size: 12px;
+  color: #909399;
 }
 </style>

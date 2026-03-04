@@ -13,11 +13,27 @@ import { stringify } from "qs";
 import { getToken, formatToken, removeToken } from "@/utils/auth";
 import { useUserStoreHook } from "@/store/modules/user";
 
+function resolveApiBaseUrl(): string {
+  const envBaseUrl = String(import.meta.env.VITE_API_BASE_URL || "").trim();
+  if (envBaseUrl) {
+    return envBaseUrl;
+  }
+
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host === "wakou-admin.onrender.com") {
+      return "https://wakou.onrender.com/api";
+    }
+  }
+
+  return "/api";
+}
+
 // 相关配置请参考：www.axios-js.com/zh-cn/docs/#axios-request-config-1
 const defaultConfig: AxiosRequestConfig = {
   // 请求超时时间
-  timeout: 10000,
-  baseURL: import.meta.env.VITE_API_BASE_URL || "/api",
+  timeout: 30000,
+  baseURL: resolveApiBaseUrl(),
   headers: {
     Accept: "application/json, text/plain, */*",
     "Content-Type": "application/json",
