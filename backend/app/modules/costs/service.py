@@ -84,37 +84,56 @@ def get_report_summary(session: Session) -> dict:
 def get_monthly_report(session: Session, year: int) -> dict:
     """Return 12-month breakdown of revenue / cost / profit."""
     from ..orders.models import Order
+    dialect = session.bind.dialect.name if session.bind is not None else ""
+
+    if dialect == "sqlite":
+        cost_month_expr = func.strftime("%m", Cost.recorded_at)
+        cost_year_expr = func.strftime("%Y", Cost.recorded_at)
+        order_month_expr = func.strftime("%m", Order.created_at)
+        order_year_expr = func.strftime("%Y", Order.created_at)
+        revenue_month_expr = func.strftime("%m", Revenue.recorded_at)
+        revenue_year_expr = func.strftime("%Y", Revenue.recorded_at)
+        target_year = str(year)
+    else:
+        cost_month_expr = func.month(Cost.recorded_at)
+        cost_year_expr = func.year(Cost.recorded_at)
+        order_month_expr = func.month(Order.created_at)
+        order_year_expr = func.year(Order.created_at)
+        revenue_month_expr = func.month(Revenue.recorded_at)
+        revenue_year_expr = func.year(Revenue.recorded_at)
+        target_year = year
+
     # Costs by month
     cost_rows = session.execute(
         select(
-            func.month(Cost.recorded_at).label("month"),
+            cost_month_expr.label("month"),
             func.sum(Cost.amount_twd).label("total"),
         )
-        .where(func.year(Cost.recorded_at) == year)
-        .group_by(func.month(Cost.recorded_at))
+        .where(cost_year_expr == target_year)
+        .group_by(cost_month_expr)
     ).fetchall()
-    cost_by_month: dict[int, int] = {row.month: row.total for row in cost_rows}
+    cost_by_month: dict[int, int] = {int(row.month): int(row.total) for row in cost_rows}
 
     # Revenue by month from paid/completed orders
     order_revenue_rows = session.execute(
         select(
-            func.month(Order.created_at).label("month"),
+            order_month_expr.label("month"),
             func.sum(func.coalesce(Order.final_amount_twd, Order.amount_twd)).label("total"),
         )
         .where(
             Order.status.in_(["paid", "completed"]),
-            func.year(Order.created_at) == year,
+            order_year_expr == target_year,
         )
-        .group_by(func.month(Order.created_at))
+        .group_by(order_month_expr)
     ).fetchall()
 
     manual_revenue_rows = session.execute(
         select(
-            func.month(Revenue.recorded_at).label("month"),
+            revenue_month_expr.label("month"),
             func.sum(Revenue.amount_twd).label("total"),
         )
-        .where(func.year(Revenue.recorded_at) == year)
-        .group_by(func.month(Revenue.recorded_at))
+        .where(revenue_year_expr == target_year)
+        .group_by(revenue_month_expr)
     ).fetchall()
 
     revenue_by_month: dict[int, int] = {}

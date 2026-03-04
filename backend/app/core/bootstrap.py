@@ -32,6 +32,10 @@ Product = product_models.Product
 MagazineArticle = magazine_models.MagazineArticle
 Category = categories_model_module.Category
 Cost = costs_model_module.Cost
+ProductLedger = ledger_model_module.ProductLedger
+Investor = ledger_model_module.Investor
+InvestorContribution = ledger_model_module.InvestorContribution
+ProfitDistribution = ledger_model_module.ProfitDistribution
 
 
 def _run_migrations() -> None:  # noqa: WPS430
@@ -204,6 +208,92 @@ def reset_state() -> None:
             "price_twd": 9800, "grade": "S",
             "image_urls": ["/Wallets.png"],
             "description": {"zh-Hant": "法式優雅印花絲巾，品相如新的珍稀品。", "ja": "フレンチエレガンスのシルクスカーフ、極美品。", "en": "French-elegant silk scarf in pristine condition."},
+        },
+    ])
+    PRODUCTS.extend([
+        {
+            "id": 7, "sku": "WK-WATCH-002", "category": "watch",
+            "name": {"zh-Hant": "Omega Seamaster 300", "ja": "オメガ シーマスター 300", "en": "Omega Seamaster 300"},
+            "price_twd": 248000, "grade": "A",
+            "image_urls": ["/Watches.png"],
+            "description": {"zh-Hant": "經典潛水設計，夜光刻度完整，保養紀錄齊全。", "ja": "クラシックなダイバーズデザイン。夜光とメンテ記録が良好。", "en": "Classic diver design with strong lume and full service records."},
+        },
+        {
+            "id": 8, "sku": "WK-WATCH-003", "category": "watch",
+            "name": {"zh-Hant": "Grand Seiko 61GS", "ja": "グランドセイコー 61GS", "en": "Grand Seiko 61GS"},
+            "price_twd": 128000, "grade": "A",
+            "image_urls": ["/Watches.png"],
+            "description": {"zh-Hant": "高振頻經典款，盤面乾淨，收藏與日常兼具。", "ja": "ハイビートの名機。コレクション性と実用性を両立。", "en": "High-beat classic balancing collector value and daily wearability."},
+        },
+        {
+            "id": 9, "sku": "WK-BAG-002", "category": "bag",
+            "name": {"zh-Hant": "Louis Vuitton Keepall 50", "ja": "ルイ・ヴィトン キーポル 50", "en": "Louis Vuitton Keepall 50"},
+            "price_twd": 46000, "grade": "A",
+            "image_urls": ["/Handbags.png"],
+            "description": {"zh-Hant": "Monogram 老花旅行袋，皮革油亮，結構完整。", "ja": "モノグラムの旅行バッグ。革の艶と形状保持が良好。", "en": "Monogram travel bag with glossy leather and excellent structure."},
+        },
+        {
+            "id": 10, "sku": "WK-BAG-003", "category": "bag",
+            "name": {"zh-Hant": "Chanel 2.55 Reissue", "ja": "シャネル 2.55 リイシュー", "en": "Chanel 2.55 Reissue"},
+            "price_twd": 186000, "grade": "A",
+            "image_urls": ["/Handbags.png"],
+            "description": {"zh-Hant": "復古銀鍊與做舊小牛皮，經典比例耐看。", "ja": "ヴィンテージシルバーチェーンとエイジドレザーの定番。", "en": "Timeless proportions with vintage silver chain and aged calfskin."},
+        },
+        {
+            "id": 11, "sku": "WK-JEWELRY-002", "category": "jewelry",
+            "name": {"zh-Hant": "Cartier Trinity Ring", "ja": "カルティエ トリニティ リング", "en": "Cartier Trinity Ring"},
+            "price_twd": 52000, "grade": "A",
+            "image_urls": ["/Jewelry.png"],
+            "description": {"zh-Hant": "三色金環設計，尺寸友善，百搭收藏款。", "ja": "3色ゴールドの象徴的デザイン。デイリーにも最適。", "en": "Iconic tri-gold design, wearable sizing, versatile collector piece."},
+        },
+        {
+            "id": 12, "sku": "WK-JEWELRY-003", "category": "jewelry",
+            "name": {"zh-Hant": "Mikimoto Akoya 珍珠耳環", "ja": "ミキモト アコヤパール ピアス", "en": "Mikimoto Akoya Pearl Earrings"},
+            "price_twd": 36000, "grade": "S",
+            "image_urls": ["/Jewelry.png"],
+            "description": {"zh-Hant": "光澤均勻，附盒單，狀態近新。", "ja": "照りの良いアコヤパール。箱付きでコンディション良好。", "en": "Lustrous Akoya pearls with box and papers in near-mint condition."},
+        },
+        {
+            "id": 13, "sku": "WK-APPAREL-002", "category": "apparel",
+            "name": {"zh-Hant": "Levi's 507XX 丹寧外套", "ja": "リーバイス 507XX デニムジャケット", "en": "Levi's 507XX Denim Jacket"},
+            "price_twd": 42000, "grade": "A",
+            "image_urls": ["/Apparel.png"],
+            "description": {"zh-Hant": "二戰後經典版型，色落ち漂亮，布邊完整。", "ja": "戦後モデルの名作。色落ちとセルビッジの状態が良好。", "en": "Post-war icon with beautiful fade and intact selvedge details."},
+        },
+        {
+            "id": 14, "sku": "WK-APPAREL-003", "category": "apparel",
+            "name": {"zh-Hant": "Burberry Vintage Trench", "ja": "バーバリー ヴィンテージ トレンチ", "en": "Burberry Vintage Trench"},
+            "price_twd": 33800, "grade": "A",
+            "image_urls": ["/Apparel.png"],
+            "description": {"zh-Hant": "英國製長版風衣，版型俐落，狀態優。", "ja": "英国製ロングトレンチ。シルエットと状態が秀逸。", "en": "Made-in-UK long trench with sharp silhouette and excellent condition."},
+        },
+        {
+            "id": 15, "sku": "WK-LIFESTYLE-002", "category": "lifestyle",
+            "name": {"zh-Hant": "B&O 復古黑膠唱盤", "ja": "B&O ヴィンテージ ターンテーブル", "en": "B&O Vintage Turntable"},
+            "price_twd": 58800, "grade": "A",
+            "image_urls": ["/Lifestyle.png"],
+            "description": {"zh-Hant": "丹麥工業美學代表，運作正常，收藏級外觀。", "ja": "デンマーク工業デザインの名品。動作良好。", "en": "Danish industrial design icon in working condition with collector finish."},
+        },
+        {
+            "id": 16, "sku": "WK-LIFESTYLE-003", "category": "lifestyle",
+            "name": {"zh-Hant": "昭和木作展示架", "ja": "昭和ヴィンテージ 木製シェルフ", "en": "Showa Vintage Wooden Shelf"},
+            "price_twd": 16800, "grade": "B",
+            "image_urls": ["/Lifestyle.png"],
+            "description": {"zh-Hant": "溫潤木紋與歲月痕跡，適合居家展示。", "ja": "木目の風合いが美しい昭和期のディスプレイシェルフ。", "en": "Warm grain and patina make it ideal for curated home display."},
+        },
+        {
+            "id": 17, "sku": "WK-ACC-002", "category": "accessory",
+            "name": {"zh-Hant": "Hermès 皮革手環", "ja": "エルメス レザーブレスレット", "en": "Hermès Leather Bracelet"},
+            "price_twd": 14800, "grade": "S",
+            "image_urls": ["/Wallets.png"],
+            "description": {"zh-Hant": "經典扣具與細緻皮革，日常佩戴百搭。", "ja": "定番金具と上質レザーでデイリーに使いやすい。", "en": "Classic hardware and refined leather for versatile daily wear."},
+        },
+        {
+            "id": 18, "sku": "WK-ACC-003", "category": "accessory",
+            "name": {"zh-Hant": "Gucci Vintage Wallet", "ja": "グッチ ヴィンテージ ウォレット", "en": "Gucci Vintage Wallet"},
+            "price_twd": 12600, "grade": "A",
+            "image_urls": ["/Wallets.png"],
+            "description": {"zh-Hant": "經典 GG 紋，內層乾淨，保存良好。", "ja": "GG パターンの定番ウォレット。内装状態も良好。", "en": "Classic GG pattern wallet with clean interior and strong preservation."},
         },
     ])
     WAREHOUSE_LOGS.extend(
@@ -1042,6 +1132,56 @@ def reset_state() -> None:
         _cost_session.commit()
     finally:
         _cost_session.close()
+
+    # Write ledger/investor seed data for finance module demo
+    _ledger_session = SessionLocal()
+    try:
+        from sqlalchemy import delete as _delete_ledger
+
+        _ledger_session.execute(_delete_ledger(ProfitDistribution))
+        _ledger_session.execute(_delete_ledger(InvestorContribution))
+        _ledger_session.execute(_delete_ledger(Investor))
+        _ledger_session.execute(_delete_ledger(ProductLedger))
+
+        investors = [
+            Investor(name="雷思翰", note="共同創辦人"),
+            Investor(name="林少宏", note="營運投資"),
+            Investor(name="吳俊賢", note="品牌投資"),
+            Investor(name="黃英哲", note="技術合夥"),
+        ]
+        _ledger_session.add_all(investors)
+        _ledger_session.flush()
+
+        contributions = [
+            InvestorContribution(investor_id=investors[0].id, amount_twd=400000, contributed_at=_date.fromisoformat("2026-01-05"), note="第一輪資金"),
+            InvestorContribution(investor_id=investors[1].id, amount_twd=320000, contributed_at=_date.fromisoformat("2026-01-08"), note="第一輪資金"),
+            InvestorContribution(investor_id=investors[2].id, amount_twd=280000, contributed_at=_date.fromisoformat("2026-01-10"), note="第一輪資金"),
+            InvestorContribution(investor_id=investors[3].id, amount_twd=200000, contributed_at=_date.fromisoformat("2026-01-12"), note="技術與平台建置"),
+        ]
+        _ledger_session.add_all(contributions)
+
+        ledger_items = [
+            ProductLedger(item_name="Rolex Submariner 5513", purchase_date=_date.fromisoformat("2026-02-03"), cost_jpy=1080000, exchange_rate=0.22, cost_twd=237600, expected_price_twd=380000, actual_price_twd=365000, sold=1, grade="A", box_and_papers="有盒單", location="日本", source="業者寄售", customer_source="LINE", note="已交付"),
+            ProductLedger(item_name="Vintage Hermès Kelly 32", purchase_date=_date.fromisoformat("2026-02-05"), cost_jpy=1400000, exchange_rate=0.22, cost_twd=308000, expected_price_twd=450000, actual_price_twd=420000, sold=1, grade="A", box_and_papers="有盒單", location="日本", source="拍賣", customer_source="Instagram", note="成交通路單"),
+            ProductLedger(item_name="Tiffany Antique Pearl Necklace", purchase_date=_date.fromisoformat("2026-02-08"), cost_jpy=190000, exchange_rate=0.22, cost_twd=41800, expected_price_twd=78000, actual_price_twd=68000, sold=1, grade="A", box_and_papers="有盒單", location="日本", source="店鋪", customer_source="LINE", note="已售"),
+            ProductLedger(item_name="Seven by Seven Denim Jacket", purchase_date=_date.fromisoformat("2026-02-12"), cost_jpy=52000, exchange_rate=0.22, cost_twd=11440, expected_price_twd=23000, actual_price_twd=None, sold=0, grade="S", box_and_papers="無盒單", location="日本", source="業者", customer_source="", note="待售"),
+            ProductLedger(item_name="昭和銅製花器", purchase_date=_date.fromisoformat("2026-02-14"), cost_jpy=30000, exchange_rate=0.22, cost_twd=6600, expected_price_twd=18000, actual_price_twd=12500, sold=1, grade="A", box_and_papers="無盒單", location="日本", source="古物市場", customer_source="LINE", note="已售"),
+        ]
+        _ledger_session.add_all(ledger_items)
+        _ledger_session.flush()
+
+        _ledger_session.add_all([
+            ProfitDistribution(ledger_item_id=ledger_items[0].id, investor_id=investors[0].id, label=investors[0].name, amount_twd=22000),
+            ProfitDistribution(ledger_item_id=ledger_items[0].id, investor_id=investors[1].id, label=investors[1].name, amount_twd=22000),
+            ProfitDistribution(ledger_item_id=ledger_items[0].id, investor_id=None, label="技術分紅", amount_twd=83400),
+            ProfitDistribution(ledger_item_id=ledger_items[1].id, investor_id=investors[0].id, label=investors[0].name, amount_twd=18000),
+            ProfitDistribution(ledger_item_id=ledger_items[1].id, investor_id=investors[2].id, label=investors[2].name, amount_twd=18000),
+            ProfitDistribution(ledger_item_id=ledger_items[1].id, investor_id=None, label="技術分紅", amount_twd=76000),
+        ])
+
+        _ledger_session.commit()
+    finally:
+        _ledger_session.close()
 
 def bootstrap_state() -> None:
     Base.metadata.create_all(bind=engine)
