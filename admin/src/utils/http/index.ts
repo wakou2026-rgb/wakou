@@ -14,19 +14,21 @@ import { getToken, formatToken, removeToken } from "@/utils/auth";
 import { useUserStoreHook } from "@/store/modules/user";
 
 function resolveApiBaseUrl(): string {
-  const envBaseUrl = String(import.meta.env.VITE_API_BASE_URL || "").trim();
+  const envBaseUrl = String(import.meta.env.VITE_API_BASE_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
   if (envBaseUrl) {
-    return envBaseUrl;
+    return envBaseUrl.endsWith("/api") ? envBaseUrl.slice(0, -4) : envBaseUrl;
   }
 
   if (typeof window !== "undefined") {
     const host = window.location.hostname;
     if (host === "wakou-admin.onrender.com") {
-      return "https://wakou.onrender.com/api";
+      return "https://wakou.onrender.com";
     }
   }
 
-  return "/api";
+  return "";
 }
 
 // 相关配置请参考：www.axios-js.com/zh-cn/docs/#axios-request-config-1
