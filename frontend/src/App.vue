@@ -15,7 +15,7 @@
           <RouterLink to="/about">{{ $t("nav.about") }}</RouterLink>
 
           <RouterLink :to="isLoggedIn ? '/dashboard' : '/login'">{{ $t("nav.dashboard") }}</RouterLink>
-          <a v-if="isAdminRole" href="/admin/">{{ $t("nav.admin") }}</a>
+          <a v-if="isAdminRole" :href="adminConsoleUrl">{{ $t("nav.admin") }}</a>
           <RouterLink v-if="!isLoggedIn" to="/login">{{ $t("nav.login") }}</RouterLink>
           <button v-else class="logout-btn" @click="handleLogout">{{ $t("nav.logout") || "Logout" }}</button>
         </nav>
@@ -56,7 +56,7 @@
       <RouterLink to="/about">{{ $t("nav.about") }}</RouterLink>
 
       <RouterLink :to="isLoggedIn ? '/dashboard' : '/login'">{{ $t("nav.dashboard") }}</RouterLink>
-      <a v-if="isAdminRole" href="/admin/">{{ $t("nav.admin_short") }}</a>
+      <a v-if="isAdminRole" :href="adminConsoleUrl">{{ $t("nav.admin_short") }}</a>
     </nav>
 
     <main class="main-content">
@@ -115,6 +115,9 @@ const authStore = useAuthStore();
 const router = useRouter();
 const route = useRoute();
 const adminRoles = new Set(["admin", "super_admin", "sales", "maintenance"]);
+const adminConsoleUrl = computed(
+  () => import.meta.env.VITE_ADMIN_CONSOLE_URL || "https://wakou-admin.onrender.com"
+);
 
 const isLoggedIn = computed(() => authStore.isLoggedIn);
 const isAdminRole = computed(() => adminRoles.has(authStore.role));
