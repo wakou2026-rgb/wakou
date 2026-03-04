@@ -8,7 +8,7 @@ import ssl
 
 def _smtp_config() -> dict[str, str | int | float | bool]:
     host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
-    port = int(os.getenv("SMTP_PORT", "587"))
+    port = int(os.getenv("SMTP_PORT", "465"))
     username = os.getenv("SMTP_USER", "").strip()
     password = os.getenv("SMTP_APP_PASSWORD", "").strip()
     sender = os.getenv("MAIL_FROM", username).strip()
@@ -88,12 +88,19 @@ def send_email(to_email: str, subject: str, body: str, html_body: str | None = N
 
     context = ssl.create_default_context()
     try:
-        with smtplib.SMTP(str(cfg["host"]), int(cfg["port"]), timeout=float(cfg["timeout"])) as server:
-            server.ehlo()
-            server.starttls(context=context)
-            server.ehlo()
-            server.login(str(cfg["username"]), str(cfg["password"]))
-            server.send_message(message)
+        if int(cfg["port"]) == 465:
+            # SSL 直連（port 465）
+            with smtplib.SMTP_SSL(str(cfg["host"]), 465, context=context, timeout=float(cfg["timeout"])) as server:
+                server.login(str(cfg["username"]), str(cfg["password"]))
+                server.send_message(message)
+        else:
+            # STARTTLS（port 587）
+            with smtplib.SMTP(str(cfg["host"]), int(cfg["port"]), timeout=float(cfg["timeout"])) as server:
+                server.ehlo()
+                server.starttls(context=context)
+                server.ehlo()
+                server.login(str(cfg["username"]), str(cfg["password"]))
+                server.send_message(message)
         return True, "sent"
     except smtplib.SMTPAuthenticationError:
         return False, "smtp-auth-failed"
